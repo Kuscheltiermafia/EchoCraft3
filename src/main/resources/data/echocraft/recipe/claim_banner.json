@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "WWW",
+    "WWW",
+    "ISI"
+  ],
+  "key": {
+    "W": {"tag": "minecraft:wool"},
+    "I": {"item": "minecraft:iron_ingot"},
+    "S": {"item": "minecraft:stick"}
+  },
+  "result": {
+    "id": "echocraft:claim_banner",
+    "count": 1
+  }
+}
