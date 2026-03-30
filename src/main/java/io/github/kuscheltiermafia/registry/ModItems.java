@@ -27,16 +27,17 @@ public class ModItems {
     );
 
     /**
-     * A one-use item that claims the chunk when the player right-clicks any block.
-     * Uses ITEM_MODEL to appear as a white banner for vanilla clients.
-     * Recipe: 6 wool (any colour) + 1 stick + 2 iron ingots.
+     * Placed on a block surface to claim the chunk; breaking the placed banner
+     * removes the claim and returns this item (reusable). Vanilla clients see it
+     * as a white banner via ITEM_MODEL.
+     * Recipe: 6 wool (any colour) + 2 iron ingots + 1 stick.
      */
     public static final Item CLAIM_BANNER = Registry.register(
             Registries.ITEM,
             Identifier.of(EchoCraft3.MOD_ID, "claim_banner"),
             new ClaimBannerItem(
                     new Item.Settings()
-                            .maxCount(16)
+                            .maxCount(1)
                             .component(DataComponentTypes.ITEM_MODEL,
                                     Identifier.of("minecraft", "white_banner"))
             )
