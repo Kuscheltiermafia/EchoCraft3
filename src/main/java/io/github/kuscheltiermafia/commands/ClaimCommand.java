@@ -3,6 +3,7 @@ package io.github.kuscheltiermafia.commands;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import io.github.kuscheltiermafia.claims.ClaimData;
 import io.github.kuscheltiermafia.claims.ClaimManager;
 import io.github.kuscheltiermafia.teams.TeamManager;
@@ -43,13 +44,13 @@ public class ClaimCommand {
                                 .executes(ctx -> info(ctx.getSource())))
                         .then(Commands.literal("settings")
                                 .executes(ctx -> showMenu(ctx.getSource())))
-                        .then(buildToggleCommand())
-                        .then(buildToggleDialogCommand())
+                        .then(buildHiddenClaimCommand())
         );
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> buildToggleCommand() {
         return Commands.literal("toggle")
+                .requires(ClaimCommand::isOperator)
                 .then(Commands.literal("explosions")
                         .then(Commands.literal("allowed").executes(ctx -> toggle(ctx.getSource(), "explosions", true)))
                         .then(Commands.literal("disallowed").executes(ctx -> toggle(ctx.getSource(), "explosions", false)))
@@ -104,6 +105,7 @@ public class ClaimCommand {
 
     private static LiteralArgumentBuilder<CommandSourceStack> buildToggleDialogCommand() {
         return Commands.literal("toggle_dialog")
+                .requires(ClaimCommand::isOperator)
                 .then(Commands.literal("explosions").executes(ctx -> toggleFromDialog(ctx.getSource(), "explosions")))
                 .then(Commands.literal("pvp").executes(ctx -> toggleFromDialog(ctx.getSource(), "pvp")))
                 .then(Commands.literal("foreign_break").executes(ctx -> toggleFromDialog(ctx.getSource(), "foreign_break")))
@@ -114,6 +116,12 @@ public class ClaimCommand {
                 .then(Commands.literal("ally_place").executes(ctx -> toggleFromDialog(ctx.getSource(), "ally_place")))
                 .then(Commands.literal("ally_interact").executes(ctx -> toggleFromDialog(ctx.getSource(), "ally_interact")))
                 .then(Commands.literal("ally_entity").executes(ctx -> toggleFromDialog(ctx.getSource(), "ally_entity")));
+    }
+
+    private static RequiredArgumentBuilder<CommandSourceStack, String> buildHiddenClaimCommand() {
+        return Commands.argument("claim_hidden", StringArgumentType.greedyString())
+                .suggests((context, builder) -> builder.buildFuture())
+                .executes(ctx -> executeHiddenClaimCommand(ctx.getSource(), StringArgumentType.getString(ctx, "claim_hidden")));
     }
 
     // -------------------------------------------------------------------------
@@ -355,5 +363,121 @@ public class ClaimCommand {
             case "ally_entity" -> claim.isAllyEntityAllowed();
             default -> false;
         };
+    }
+
+    private static int executeHiddenClaimCommand(CommandSourceStack source, String rawInput) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        String input = rawInput == null ? "" : rawInput.trim();
+        if (input.isEmpty()) return 0;
+
+        String[] parts = input.split("\\s+");
+        if (parts.length < 2) return 0;
+
+        String root = parts[0];
+        String key = parts[1];
+        if (!isToggleKey(key)) return 0;
+
+        if ("toggle_dialog".equals(root) && parts.length == 2) {
+            return toggleFromDialog(source, key);
+        }
+
+        if ("toggle".equals(root) && parts.length == 3) {
+            Boolean enabled = parseToggleState(parts[2]);
+            if (enabled == null) return 0;
+            return toggle(source, key, enabled);
+        }
+
+        return 0;
+    }
+
+    private static boolean isToggleKey(String key) {
+        return switch (key) {
+            case "explosions", "pvp", "foreign_break", "foreign_place", "foreign_interact", "foreign_entity",
+                    "ally_break", "ally_place", "ally_interact", "ally_entity" -> true;
+            default -> false;
+        };
+    }
+
+    private static Boolean parseToggleState(String rawState) {
+        return switch (rawState) {
+            case "allowed", "on" -> true;
+            case "disallowed", "off" -> false;
+            default -> null;
+        };
+    }
+
+    private static boolean isOperator(CommandSourceStack source) {
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            return true;
+        }
+
+        Boolean bySource = invokeBoolean(source, "hasPermission", 2);
+        if (bySource != null) return bySource;
+        bySource = invokeBoolean(source, "hasPermissionLevel", 2);
+        if (bySource != null) return bySource;
+
+        Integer level = invokeInt(source, "permissionLevel");
+        if (level != null) return level >= 2;
+        level = invokeInt(source, "getPermissionLevel");
+        if (level != null) return level >= 2;
+
+        Boolean byPlayer = invokeBoolean(player, "hasPermissions", 2);
+        if (byPlayer != null) return byPlayer;
+
+        try {
+            Object playerList = source.getServer().getPlayerList();
+            Object gameProfile = player.getGameProfile();
+            for (java.lang.reflect.Method method : playerList.getClass().getMethods()) {
+                if (!"isOp".equals(method.getName()) || method.getParameterCount() != 1) continue;
+                Class<?> paramType = method.getParameterTypes()[0];
+
+                Object arg = null;
+                if (paramType.isInstance(gameProfile)) {
+                    arg = gameProfile;
+                } else {
+                    for (java.lang.reflect.Constructor<?> ctor : paramType.getConstructors()) {
+                        Class<?>[] params = ctor.getParameterTypes();
+                        if (params.length == 2 && params[0] == String.class && params[1] == java.util.UUID.class) {
+                            arg = ctor.newInstance(player.getName().getString(), player.getUUID());
+                            break;
+                        }
+                        if (params.length == 2 && params[0] == java.util.UUID.class && params[1] == String.class) {
+                            arg = ctor.newInstance(player.getUUID(), player.getName().getString());
+                            break;
+                        }
+                    }
+                }
+
+                if (arg != null) {
+                    Object value = method.invoke(playerList, arg);
+                    if (value instanceof Boolean allowed) {
+                        return allowed;
+                    }
+                }
+            }
+        } catch (ReflectiveOperationException ignored) {
+        }
+
+        // Safe fallback: if we cannot prove OP status, treat player as non-op for hidden command visibility.
+        return false;
+    }
+
+    private static Boolean invokeBoolean(Object target, String methodName, int arg) {
+        try {
+            Object value = target.getClass().getMethod(methodName, int.class).invoke(target, arg);
+            return value instanceof Boolean b ? b : null;
+        } catch (ReflectiveOperationException ignored) {
+            return null;
+        }
+    }
+
+    private static Integer invokeInt(Object target, String methodName) {
+        try {
+            Object value = target.getClass().getMethod(methodName).invoke(target);
+            if (value instanceof Integer i) return i;
+            if (value instanceof Number n) return n.intValue();
+            return null;
+        } catch (ReflectiveOperationException ignored) {
+            return null;
+        }
     }
 }

@@ -2,6 +2,7 @@ package io.github.kuscheltiermafia.commands;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import io.github.kuscheltiermafia.claims.ClaimData;
 import io.github.kuscheltiermafia.claims.ClaimManager;
 import io.github.kuscheltiermafia.registry.ModItems;
@@ -75,32 +76,6 @@ public class TeamCommand {
                                                 ctx.getSource(),
                                                 StringArgumentType.getString(ctx, "member")
                                         ))))
-                        .then(Commands.literal("settings_color")
-                                .executes(ctx -> openTeamColorSettings(ctx.getSource())))
-                        .then(Commands.literal("teamname")
-                                .then(Commands.argument("value", StringArgumentType.greedyString())
-                                        .executes(ctx -> setTeamName(
-                                                ctx.getSource(),
-                                                StringArgumentType.getString(ctx, "value")
-                                        ))))
-                        .then(Commands.literal("teamnamecolor")
-                                .then(Commands.argument("value", StringArgumentType.word())
-                                        .executes(ctx -> setTeamNameColor(
-                                                ctx.getSource(),
-                                                StringArgumentType.getString(ctx, "value")
-                                        ))))
-                        .then(Commands.literal("teamnamecolor_refresh")
-                                .then(Commands.argument("value", StringArgumentType.word())
-                                        .executes(ctx -> setTeamNameColorAndRefresh(
-                                                ctx.getSource(),
-                                                StringArgumentType.getString(ctx, "value")
-                                        ))))
-                        .then(Commands.literal("teamnamecolor_hex_refresh")
-                                .then(Commands.argument("value", StringArgumentType.word())
-                                        .executes(ctx -> setTeamNameHexColorAndRefresh(
-                                                ctx.getSource(),
-                                                StringArgumentType.getString(ctx, "value")
-                                        ))))
                         .then(Commands.literal("allies")
                                 .then(Commands.literal("invite")
                                         .then(Commands.argument("team", StringArgumentType.word())
@@ -113,15 +88,40 @@ public class TeamCommand {
                                                 .executes(ctx -> allyRemove(ctx.getSource(), StringArgumentType.getString(ctx, "team")))))
                                 .then(Commands.literal("list")
                                         .executes(ctx -> allyList(ctx.getSource()))))
-                        .then(Commands.literal("setrole")
-                                .then(Commands.argument("player", StringArgumentType.word())
-                                        .then(Commands.argument("role", StringArgumentType.word())
-                                                .executes(ctx -> setRole(
-                                                        ctx.getSource(),
-                                                        StringArgumentType.getString(ctx, "player"),
-                                                        StringArgumentType.getString(ctx, "role")
-                                                )))))
+                        .then(buildHiddenTeamCommand())
         );
+    }
+
+    private static RequiredArgumentBuilder<CommandSourceStack, String> buildHiddenTeamCommand() {
+        return Commands.argument("echoteam_hidden", StringArgumentType.greedyString())
+                .suggests((context, builder) -> builder.buildFuture())
+                .executes(ctx -> executeHiddenTeamCommand(ctx.getSource(), StringArgumentType.getString(ctx, "echoteam_hidden")));
+    }
+
+    private static int executeHiddenTeamCommand(CommandSourceStack source, String rawInput) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        String input = rawInput == null ? "" : rawInput.trim();
+        if (input.isEmpty()) return 0;
+
+        String[] parts = input.split("\\s+");
+        if (parts.length == 1 && "settings_color".equals(parts[0])) {
+            return openTeamColorSettings(source);
+        }
+        if (parts.length == 3 && "setrole".equals(parts[0])) {
+            return setRole(source, parts[1], parts[2]);
+        }
+        if (parts.length == 2 && "teamnamecolor".equals(parts[0])) {
+            return setTeamNameColor(source, parts[1]);
+        }
+        if (parts.length == 2 && "teamnamecolor_refresh".equals(parts[0])) {
+            return setTeamNameColorAndRefresh(source, parts[1]);
+        }
+        if (parts.length == 2 && "teamnamecolor_hex_refresh".equals(parts[0])) {
+            return setTeamNameHexColorAndRefresh(source, parts[1]);
+        }
+        if (input.startsWith("teamname ") && input.length() > "teamname ".length()) {
+            return setTeamName(source, input.substring("teamname ".length()));
+        }
+        return 0;
     }
 
     // -------------------------------------------------------------------------
@@ -880,6 +880,82 @@ public class TeamCommand {
                 level.setBlock(bannerPos, Blocks.AIR.defaultBlockState(), 3);
                 break;
             }
+        }
+    }
+
+    private static boolean isOperator(CommandSourceStack source) {
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            return true;
+        }
+
+        Boolean bySource = invokeBoolean(source, "hasPermission", 2);
+        if (bySource != null) return bySource;
+        bySource = invokeBoolean(source, "hasPermissionLevel", 2);
+        if (bySource != null) return bySource;
+
+        Integer level = invokeInt(source, "permissionLevel");
+        if (level != null) return level >= 2;
+        level = invokeInt(source, "getPermissionLevel");
+        if (level != null) return level >= 2;
+
+        Boolean byPlayer = invokeBoolean(player, "hasPermissions", 2);
+        if (byPlayer != null) return byPlayer;
+
+        try {
+            Object playerList = source.getServer().getPlayerList();
+            Object gameProfile = player.getGameProfile();
+            for (java.lang.reflect.Method method : playerList.getClass().getMethods()) {
+                if (!"isOp".equals(method.getName()) || method.getParameterCount() != 1) continue;
+                Class<?> paramType = method.getParameterTypes()[0];
+
+                Object arg = null;
+                if (paramType.isInstance(gameProfile)) {
+                    arg = gameProfile;
+                } else {
+                    for (java.lang.reflect.Constructor<?> ctor : paramType.getConstructors()) {
+                        Class<?>[] params = ctor.getParameterTypes();
+                        if (params.length == 2 && params[0] == String.class && params[1] == java.util.UUID.class) {
+                            arg = ctor.newInstance(player.getName().getString(), player.getUUID());
+                            break;
+                        }
+                        if (params.length == 2 && params[0] == java.util.UUID.class && params[1] == String.class) {
+                            arg = ctor.newInstance(player.getUUID(), player.getName().getString());
+                            break;
+                        }
+                    }
+                }
+
+                if (arg != null) {
+                    Object value = method.invoke(playerList, arg);
+                    if (value instanceof Boolean allowed) {
+                        return allowed;
+                    }
+                }
+            }
+        } catch (ReflectiveOperationException ignored) {
+        }
+
+        // Safe fallback: if we cannot prove OP status, treat player as non-op for hidden command visibility.
+        return false;
+    }
+
+    private static Boolean invokeBoolean(Object target, String methodName, int arg) {
+        try {
+            Object value = target.getClass().getMethod(methodName, int.class).invoke(target, arg);
+            return value instanceof Boolean b ? b : null;
+        } catch (ReflectiveOperationException ignored) {
+            return null;
+        }
+    }
+
+    private static Integer invokeInt(Object target, String methodName) {
+        try {
+            Object value = target.getClass().getMethod(methodName).invoke(target);
+            if (value instanceof Integer i) return i;
+            if (value instanceof Number n) return n.intValue();
+            return null;
+        } catch (ReflectiveOperationException ignored) {
+            return null;
         }
     }
 }

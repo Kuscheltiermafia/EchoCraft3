@@ -2,6 +2,7 @@ package io.github.kuscheltiermafia.commands;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import io.github.kuscheltiermafia.users.LocatorBarColor;
 import io.github.kuscheltiermafia.users.UserSettingsManager;
 import io.github.kuscheltiermafia.util.TextPalette;
@@ -34,37 +35,48 @@ public class UserCommand {
                                 CommandBuildContext ignoredRegistryAccess) {
         var root = Commands.literal("user")
                 .then(Commands.literal("settings").executes(ctx -> openSettings(ctx.getSource())))
-                .then(Commands.literal("settings_toggle_territory")
-                        .executes(ctx -> toggleTerritoryNotifications(ctx.getSource())))
-                .then(Commands.literal("settings_toggle_claimdeny")
-                        .executes(ctx -> toggleClaimDenyNotifications(ctx.getSource())));
+                .then(buildHiddenUserCommand());
 
-        var refreshColorRoot = Commands.literal("color_refresh");
-        for (LocatorBarColor color : LocatorBarColor.values()) {
-            refreshColorRoot.then(Commands.literal(color.token())
-                    .executes(ctx -> setColorAndRefresh(ctx.getSource(), color)));
+        dispatcher.register(root);
+    }
+
+    private static RequiredArgumentBuilder<CommandSourceStack, String> buildHiddenUserCommand() {
+        return Commands.argument("user_hidden", StringArgumentType.greedyString())
+                .suggests((context, builder) -> builder.buildFuture())
+                .executes(ctx -> executeHiddenUserCommand(ctx.getSource(), StringArgumentType.getString(ctx, "user_hidden")));
+    }
+
+    private static int executeHiddenUserCommand(CommandSourceStack source, String rawInput) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        String input = rawInput == null ? "" : rawInput.trim();
+        if (input.isEmpty()) return 0;
+
+        String[] parts = input.split("\\s+");
+        if (parts.length == 0) return 0;
+
+        if (parts.length == 2 && "color_refresh".equals(parts[0])) {
+            LocatorBarColor color = LocatorBarColor.fromToken(parts[1]);
+            if (!color.token().equals(parts[1].toLowerCase(java.util.Locale.ROOT))) return 0;
+            return setColorAndRefresh(source, color);
         }
-        root.then(refreshColorRoot);
-        root.then(Commands.literal("color_hex_refresh")
-                .then(Commands.argument("value", StringArgumentType.word())
-                        .executes(ctx -> setHexColorAndRefresh(
-                                ctx.getSource(),
-                                StringArgumentType.getString(ctx, "value")
-                        ))));
-
-        var colorRoot = Commands.literal("color");
-        colorRoot.then(Commands.literal("hex")
-                .then(Commands.argument("value", StringArgumentType.word())
-                        .executes(ctx -> setHexColor(
-                                ctx.getSource(),
-                                StringArgumentType.getString(ctx, "value")
-                        ))));
-        for (LocatorBarColor color : LocatorBarColor.values()) {
-            colorRoot.then(Commands.literal(color.token())
-                    .executes(ctx -> setColor(ctx.getSource(), color)));
+        if (parts.length == 2 && "color_hex_refresh".equals(parts[0])) {
+            return setHexColorAndRefresh(source, parts[1]);
+        }
+        if (parts.length == 2 && "color".equals(parts[0])) {
+            LocatorBarColor color = LocatorBarColor.fromToken(parts[1]);
+            if (!color.token().equals(parts[1].toLowerCase(java.util.Locale.ROOT))) return 0;
+            return setColor(source, color);
+        }
+        if (parts.length == 3 && "color".equals(parts[0]) && "hex".equals(parts[1])) {
+            return setHexColor(source, parts[2]);
         }
 
-        dispatcher.register(root.then(colorRoot));
+        if ("settings_toggle_territory".equals(input)) {
+            return toggleTerritoryNotifications(source);
+        }
+        if ("settings_toggle_claimdeny".equals(input)) {
+            return toggleClaimDenyNotifications(source);
+        }
+        return 0;
     }
 
     private static int openSettings(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
