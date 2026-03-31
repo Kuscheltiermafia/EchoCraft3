@@ -17,6 +17,12 @@ public class ClaimData {
     private boolean foreignBreakAllowed = false;
     private boolean foreignPlaceAllowed = false;
     private boolean foreignInteractAllowed = false;
+    private boolean foreignEntityAllowed = false;
+
+    private boolean allyBreakAllowed = true;
+    private boolean allyPlaceAllowed = true;
+    private boolean allyInteractAllowed = true;
+    private boolean allyEntityAllowed = true;
 
     public ClaimData(UUID ownerUuid, String ownerName, String dimensionId, int bannerX, int bannerY, int bannerZ) {
         this.ownerUuid = ownerUuid;
@@ -46,4 +52,15 @@ public class ClaimData {
     public void setForeignPlaceAllowed(boolean foreignPlaceAllowed) { this.foreignPlaceAllowed = foreignPlaceAllowed; }
     public boolean isForeignInteractAllowed() { return foreignInteractAllowed; }
     public void setForeignInteractAllowed(boolean foreignInteractAllowed) { this.foreignInteractAllowed = foreignInteractAllowed; }
+    public boolean isForeignEntityAllowed() { return foreignEntityAllowed; }
+    public void setForeignEntityAllowed(boolean foreignEntityAllowed) { this.foreignEntityAllowed = foreignEntityAllowed; }
+
+    public boolean isAllyBreakAllowed() { return allyBreakAllowed; }
+    public void setAllyBreakAllowed(boolean allyBreakAllowed) { this.allyBreakAllowed = allyBreakAllowed; }
+    public boolean isAllyPlaceAllowed() { return allyPlaceAllowed; }
+    public void setAllyPlaceAllowed(boolean allyPlaceAllowed) { this.allyPlaceAllowed = allyPlaceAllowed; }
+    public boolean isAllyInteractAllowed() { return allyInteractAllowed; }
+    public void setAllyInteractAllowed(boolean allyInteractAllowed) { this.allyInteractAllowed = allyInteractAllowed; }
+    public boolean isAllyEntityAllowed() { return allyEntityAllowed; }
+    public void setAllyEntityAllowed(boolean allyEntityAllowed) { this.allyEntityAllowed = allyEntityAllowed; }
 }

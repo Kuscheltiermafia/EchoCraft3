@@ -13,6 +13,8 @@ public class TeamData {
     private final Set<UUID> members = new HashSet<>();
     private final Set<UUID> pendingInvites = new HashSet<>();
     private final Map<UUID, TeamRole> roles = new HashMap<>();
+    private final Set<String> allies = new HashSet<>();
+    private final Set<String> pendingAllyInvites = new HashSet<>();
 
     public TeamData(String name, UUID leader) {
         this.name = name;
@@ -22,12 +24,15 @@ public class TeamData {
     }
 
     // Raw constructor for deserialization
-    TeamData(String name, UUID leader, Set<UUID> members, Set<UUID> pendingInvites, Map<UUID, TeamRole> roles) {
+    TeamData(String name, UUID leader, Set<UUID> members, Set<UUID> pendingInvites, Map<UUID, TeamRole> roles,
+             Set<String> allies, Set<String> pendingAllyInvites) {
         this.name = name;
         this.leader = leader;
         this.members.addAll(members);
         this.pendingInvites.addAll(pendingInvites);
         this.roles.putAll(roles);
+        this.allies.addAll(allies);
+        this.pendingAllyInvites.addAll(pendingAllyInvites);
         this.members.add(leader);
         this.roles.put(leader, TeamRole.LEADER);
         for (UUID member : this.members) {
@@ -36,12 +41,19 @@ public class TeamData {
     }
 
     public String getName() { return name; }
-    public UUID getLeader() { return leader; }
+    public UUID getLeader() {
+        for (Map.Entry<UUID, TeamRole> entry : roles.entrySet()) {
+            if (entry.getValue() == TeamRole.LEADER) return entry.getKey();
+        }
+        return leader;
+    }
     public Set<UUID> getMembers() { return members; }
     public Set<UUID> getPendingInvites() { return pendingInvites; }
     public Map<UUID, TeamRole> getRoles() { return roles; }
+    public Set<String> getAllies() { return allies; }
+    public Set<String> getPendingAllyInvites() { return pendingAllyInvites; }
 
-    public boolean isLeader(UUID uuid) { return leader.equals(uuid); }
+    public boolean isLeader(UUID uuid) { return roles.get(uuid) == TeamRole.LEADER; }
     public boolean isModerator(UUID uuid) {
         TeamRole role = roles.get(uuid);
         return role == TeamRole.MODERATOR || role == TeamRole.LEADER;
@@ -66,18 +78,47 @@ public class TeamData {
         if (!isLeader(actor)) return;
         if (!members.contains(target)) return;
         roles.put(target, newRole);
-        if (newRole == TeamRole.LEADER) {
-            roles.put(leader, TeamRole.MEMBER);
-            leader = target;
-        }
+        if (newRole == TeamRole.LEADER) leader = target;
+    }
+
+    public void inviteAlly(String teamName) {
+        pendingAllyInvites.add(teamName.toLowerCase());
+    }
+
+    public boolean hasPendingAllyInvite(String teamName) {
+        return pendingAllyInvites.contains(teamName.toLowerCase());
+    }
+
+    public void acceptAlly(String teamName) {
+        String key = teamName.toLowerCase();
+        pendingAllyInvites.remove(key);
+        allies.add(key);
+    }
+
+    public void removeAlly(String teamName) {
+        allies.remove(teamName.toLowerCase());
+        pendingAllyInvites.remove(teamName.toLowerCase());
+    }
+
+    public boolean isAlliedWith(String teamName) {
+        return allies.contains(teamName.toLowerCase());
     }
 
     public void removeMember(UUID uuid) {
         members.remove(uuid);
         roles.remove(uuid);
-        if (leader.equals(uuid) && !members.isEmpty()) {
-            leader = members.iterator().next();
-            roles.put(leader, TeamRole.LEADER);
+        boolean hasLeader = false;
+        for (UUID member : members) {
+            if (roles.get(member) == TeamRole.LEADER) {
+                hasLeader = true;
+                leader = member;
+                break;
+            }
+        }
+        if (!hasLeader && !members.isEmpty()) {
+            UUID replacement = members.iterator().next();
+            roles.put(replacement, TeamRole.LEADER);
+            leader = replacement;
         }
     }
 }

@@ -1,15 +1,24 @@
 {
   "type": "minecraft:crafting_shaped",
-  "show_notification": true,
+  "show_notification": false,
   "category": "equipment",
   "pattern": [
-    "XXX",
-    "XXX",
-    " X "
+    "WGW",
+    "WXW",
+    " S "
   ],
   "key": {
     "X": [
-      "minecraft:iron_ingot"
+      "minecraft:lodestone"
+    ],
+    "W": [
+      "minecraft:white_wool"
+    ],
+    "G": [
+      "minecraft:gold_block"
+    ],
+    "S": [
+      "minecraft:stick"
     ]
   },
   "result": {

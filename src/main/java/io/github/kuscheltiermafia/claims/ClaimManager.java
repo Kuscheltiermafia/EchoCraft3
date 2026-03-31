@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.List;
 import java.util.WeakHashMap;
 
 public class ClaimManager extends SavedData {
@@ -54,6 +55,10 @@ public class ClaimManager extends SavedData {
 
     public ClaimData getClaim(String dimensionId, int chunkX, int chunkZ) {
         return claims.get(makeKey(dimensionId, chunkX, chunkZ));
+    }
+
+    public List<ClaimData> getAllClaims() {
+        return List.copyOf(claims.values());
     }
 
     /**
@@ -126,6 +131,89 @@ public class ClaimManager extends SavedData {
         }
     }
 
+    public void setForeignEntityAllowed(String dimensionId, int chunkX, int chunkZ, boolean allowed) {
+        ClaimData data = claims.get(makeKey(dimensionId, chunkX, chunkZ));
+        if (data != null) {
+            data.setForeignEntityAllowed(allowed);
+            markDirtyAndPersist();
+        }
+    }
+
+    public void setAllyBreakAllowed(String dimensionId, int chunkX, int chunkZ, boolean allowed) {
+        ClaimData data = claims.get(makeKey(dimensionId, chunkX, chunkZ));
+        if (data != null) {
+            data.setAllyBreakAllowed(allowed);
+            markDirtyAndPersist();
+        }
+    }
+
+    public void setAllyPlaceAllowed(String dimensionId, int chunkX, int chunkZ, boolean allowed) {
+        ClaimData data = claims.get(makeKey(dimensionId, chunkX, chunkZ));
+        if (data != null) {
+            data.setAllyPlaceAllowed(allowed);
+            markDirtyAndPersist();
+        }
+    }
+
+    public void setAllyInteractAllowed(String dimensionId, int chunkX, int chunkZ, boolean allowed) {
+        ClaimData data = claims.get(makeKey(dimensionId, chunkX, chunkZ));
+        if (data != null) {
+            data.setAllyInteractAllowed(allowed);
+            markDirtyAndPersist();
+        }
+    }
+
+    public void setAllyEntityAllowed(String dimensionId, int chunkX, int chunkZ, boolean allowed) {
+        ClaimData data = claims.get(makeKey(dimensionId, chunkX, chunkZ));
+        if (data != null) {
+            data.setAllyEntityAllowed(allowed);
+            markDirtyAndPersist();
+        }
+    }
+
+    /**
+     * Applies one claim setting to every chunk claimed by the given team.
+     *
+     * @return number of claims that were updated, or -1 for unknown setting key.
+     */
+    public int setTeamSetting(String teamName, String settingKey, boolean enabled) {
+        if (teamName == null || teamName.isBlank()) return 0;
+
+        int changed = 0;
+        for (ClaimData data : claims.values()) {
+            if (data.getTeamName() == null) continue;
+            if (!teamName.equalsIgnoreCase(data.getTeamName())) continue;
+
+            boolean supported = applySetting(data, settingKey, enabled);
+            if (!supported) return -1;
+            changed++;
+        }
+
+        if (changed > 0) {
+            markDirtyAndPersist();
+        }
+        return changed;
+    }
+
+    private static boolean applySetting(ClaimData data, String key, boolean enabled) {
+        switch (key) {
+            case "explosions" -> data.setExplosionsAllowed(enabled);
+            case "pvp" -> data.setPvpAllowed(enabled);
+            case "foreign_break" -> data.setForeignBreakAllowed(enabled);
+            case "foreign_place" -> data.setForeignPlaceAllowed(enabled);
+            case "foreign_interact" -> data.setForeignInteractAllowed(enabled);
+            case "foreign_entity" -> data.setForeignEntityAllowed(enabled);
+            case "ally_break" -> data.setAllyBreakAllowed(enabled);
+            case "ally_place" -> data.setAllyPlaceAllowed(enabled);
+            case "ally_interact" -> data.setAllyInteractAllowed(enabled);
+            case "ally_entity" -> data.setAllyEntityAllowed(enabled);
+            default -> {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // -------------------------------------------------------------------------
     // SavedData serialisation
     // -------------------------------------------------------------------------
@@ -149,6 +237,11 @@ public class ClaimManager extends SavedData {
             c.putBoolean("ForeignBreakAllowed", d.isForeignBreakAllowed());
             c.putBoolean("ForeignPlaceAllowed", d.isForeignPlaceAllowed());
             c.putBoolean("ForeignInteractAllowed", d.isForeignInteractAllowed());
+            c.putBoolean("ForeignEntityAllowed", d.isForeignEntityAllowed());
+            c.putBoolean("AllyBreakAllowed", d.isAllyBreakAllowed());
+            c.putBoolean("AllyPlaceAllowed", d.isAllyPlaceAllowed());
+            c.putBoolean("AllyInteractAllowed", d.isAllyInteractAllowed());
+            c.putBoolean("AllyEntityAllowed", d.isAllyEntityAllowed());
             claimsNbt.put(entry.getKey(), c);
         }
         nbt.put("Claims", claimsNbt);
@@ -213,6 +306,11 @@ public class ClaimManager extends SavedData {
                 data.setForeignBreakAllowed(getBool(obj, "foreignBreakAllowed", false));
                 data.setForeignPlaceAllowed(getBool(obj, "foreignPlaceAllowed", false));
                 data.setForeignInteractAllowed(getBool(obj, "foreignInteractAllowed", false));
+                data.setForeignEntityAllowed(getBool(obj, "foreignEntityAllowed", false));
+                data.setAllyBreakAllowed(getBool(obj, "allyBreakAllowed", true));
+                data.setAllyPlaceAllowed(getBool(obj, "allyPlaceAllowed", true));
+                data.setAllyInteractAllowed(getBool(obj, "allyInteractAllowed", true));
+                data.setAllyEntityAllowed(getBool(obj, "allyEntityAllowed", true));
 
                 manager.claims.put(makeKey(dim, chunkX, chunkZ), data);
             }
@@ -265,6 +363,11 @@ public class ClaimManager extends SavedData {
                 obj.addProperty("foreignBreakAllowed", data.isForeignBreakAllowed());
                 obj.addProperty("foreignPlaceAllowed", data.isForeignPlaceAllowed());
                 obj.addProperty("foreignInteractAllowed", data.isForeignInteractAllowed());
+                obj.addProperty("foreignEntityAllowed", data.isForeignEntityAllowed());
+                obj.addProperty("allyBreakAllowed", data.isAllyBreakAllowed());
+                obj.addProperty("allyPlaceAllowed", data.isAllyPlaceAllowed());
+                obj.addProperty("allyInteractAllowed", data.isAllyInteractAllowed());
+                obj.addProperty("allyEntityAllowed", data.isAllyEntityAllowed());
                 claimsArray.add(obj);
             }
 

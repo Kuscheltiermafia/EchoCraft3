@@ -12,5 +12,13 @@ public enum TeamRole {
             return MEMBER;
         }
     }
+
+    public String displayName() {
+        return switch (this) {
+            case MEMBER -> "Member";
+            case MODERATOR -> "Moderator";
+            case LEADER -> "Leader";
+        };
+    }
 }
 

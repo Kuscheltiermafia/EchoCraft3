@@ -18,9 +18,7 @@
 			"io.github.kuscheltiermafia.EchoCraft3"
 		]
 	},
-	"mixins": [
-		"echocraft.mixins.json"
-	],
+	"mixins": [],
 	"depends": {
 		"fabricloader": ">=0.18.5",
 		"minecraft": "~26.1",

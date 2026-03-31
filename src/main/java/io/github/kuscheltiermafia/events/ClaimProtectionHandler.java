@@ -3,14 +3,20 @@ package io.github.kuscheltiermafia.events;
 import io.github.kuscheltiermafia.claims.ClaimData;
 import io.github.kuscheltiermafia.claims.ClaimManager;
 import io.github.kuscheltiermafia.registry.ModItems;
+import io.github.kuscheltiermafia.teams.TeamData;
 import io.github.kuscheltiermafia.teams.TeamManager;
+import io.github.kuscheltiermafia.util.TextPalette;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.fabricmc.fabric.api.event.player.UseEntityCallback;
 import net.minecraft.world.level.block.BannerBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.WallBannerBlock;
+import net.minecraft.world.level.block.AnvilBlock;
+import net.minecraft.world.level.block.CraftingTableBlock;
+import net.minecraft.world.level.block.SmithingTableBlock;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
@@ -33,11 +39,13 @@ import java.util.UUID;
  *  - Block break / interact / PvP in claimed chunks is denied for non-members.
  */
 public class ClaimProtectionHandler {
+    private static final Component CLAIM_DENY_ACTIONBAR = TextPalette.red("You can't do that in this claimed chunk");
 
     public static void register() {
         registerBannerPlace();
         registerBlockBreakProtection();
         registerUseBlockProtection();
+        registerUseEntityProtection();
         registerPvpProtection();
     }
 
@@ -62,7 +70,7 @@ public class ClaimProtectionHandler {
 
             // Ensure the target position is free (check if air)
             if (!serverWorld.getBlockState(bannerPos).isAir()) {
-                player.sendSystemMessage(Component.literal("§cNo room to place the Claim Banner here."));
+                player.sendSystemMessage(TextPalette.white("No room to place the Claim Banner here."));
                 return InteractionResult.FAIL;
             }
 
@@ -70,14 +78,23 @@ public class ClaimProtectionHandler {
             int chunkZ = bannerPos.getZ() >> 4;
             String dimId = serverWorld.dimension().toString();
             ClaimManager claims = ClaimManager.get(serverWorld.getServer());
+            TeamManager teams = TeamManager.get(serverWorld.getServer());
+            TeamData playerTeam = teams.getTeamForPlayer(player.getUUID());
+            if (playerTeam == null) {
+                player.sendSystemMessage(TextPalette.white("You must be in a team to place a Claim Banner."));
+                return InteractionResult.FAIL;
+            }
             ClaimData existing = claims.getClaim(dimId, chunkX, chunkZ);
 
             if (existing != null) {
                 if (existing.getOwnerUuid().equals(player.getUUID())) {
                     showClaimInfo(player, existing, chunkX, chunkZ);
                 } else {
-                    player.sendSystemMessage(Component.literal(
-                            "§cThis chunk is already claimed by §e" + existing.getOwnerName() + "§c."));
+                    player.sendSystemMessage(TextPalette.join(
+                            TextPalette.white("This chunk is already claimed by "),
+                            TextPalette.player(existing.getOwnerName(), existing.getOwnerUuid(), serverWorld.getServer()),
+                            TextPalette.white(".")
+                    ));
                 }
                 return InteractionResult.FAIL;
             }
@@ -101,13 +118,17 @@ public class ClaimProtectionHandler {
                     player.getUUID(), player.getName().getString(),
                     bannerPos.getX(), bannerPos.getY(), bannerPos.getZ()
             );
+            claims.setTeam(dimId, chunkX, chunkZ, playerTeam.getName());
 
             if (!player.isCreative()) {
                 stack.shrink(1);
             }
 
-            player.sendSystemMessage(Component.literal(
-                    "§aChunk claimed! Break the banner to remove the claim."));
+            player.sendSystemMessage(TextPalette.join(
+                    TextPalette.white("Chunk claimed! Break the "),
+                    TextPalette.yellow("banner"),
+                    TextPalette.white(" to remove the claim.")
+            ));
             return InteractionResult.SUCCESS;
         });
     }
@@ -127,11 +148,12 @@ public class ClaimProtectionHandler {
             ClaimData claim = claims.getClaim(dimId, chunkX, chunkZ);
             if (claim == null) return true;
 
-            if (isAllowed(player, claim, serverWorld)) {
+            AccessRelation relation = relation(player, claim, serverWorld);
+            if (relation == AccessRelation.TEAM) {
                 BlockPos bannerPos = new BlockPos(claim.getBannerX(), claim.getBannerY(), claim.getBannerZ());
                 if (pos.equals(bannerPos)) {
                     if (!canManageClaim(player, claim, serverWorld)) {
-                        player.sendSystemMessage(Component.literal("§cOnly the claim owner, team moderator or leader can remove this claim."));
+                        player.sendSystemMessage(TextPalette.white("Only the claim owner, team Moderator, or team Leader can remove this claim."));
                         return false;
                     }
                     // Remove block without vanilla loot drop
@@ -142,15 +164,17 @@ public class ClaimProtectionHandler {
                             ModItems.createClaimBannerStack());
                     // Remove the claim data
                     claims.removeClaim(dimId, chunkX, chunkZ);
-                    player.sendSystemMessage(Component.literal("§6Claim removed. Banner returned."));
+                    player.sendSystemMessage(TextPalette.white("Claim removed. Banner returned."));
                     return false; // cancel vanilla break (block already gone)
                 }
                 return true;
             }
 
+            if (relation == AccessRelation.ALLY && claim.isAllyBreakAllowed()) return true;
+
             if (claim.isForeignBreakAllowed()) return true;
 
-            player.sendSystemMessage(Component.literal("§cYou cannot break blocks in this claimed chunk!"));
+            sendClaimDenyActionbar(player);
             return false;
         });
     }
@@ -174,17 +198,48 @@ public class ClaimProtectionHandler {
             ClaimData claim = claims.getClaim(dimId, chunkX, chunkZ);
             if (claim == null) return InteractionResult.PASS;
 
-            if (isAllowed(player, claim, serverWorld)) return InteractionResult.PASS;
+            AccessRelation relation = relation(player, claim, serverWorld);
+            if (relation == AccessRelation.TEAM) return InteractionResult.PASS;
+
+            BlockState clickedState = serverWorld.getBlockState(pos);
+            if (isAlwaysAllowedUtilityBlock(clickedState)) {
+                return InteractionResult.PASS;
+            }
 
             if (player.getItemInHand(hand).getItem() instanceof BlockItem) {
-                if (claim.isForeignPlaceAllowed()) return InteractionResult.PASS;
-                player.sendSystemMessage(Component.literal("§cYou cannot place blocks in this claimed chunk!"));
+                if (relation == AccessRelation.ALLY && claim.isAllyPlaceAllowed()) return InteractionResult.PASS;
+                if (relation == AccessRelation.FOREIGN && claim.isForeignPlaceAllowed()) return InteractionResult.PASS;
+                sendClaimDenyActionbar(player);
                 return InteractionResult.FAIL;
             }
 
-            if (claim.isForeignInteractAllowed()) return InteractionResult.PASS;
+            if (relation == AccessRelation.ALLY && claim.isAllyInteractAllowed()) return InteractionResult.PASS;
+            if (relation == AccessRelation.FOREIGN && claim.isForeignInteractAllowed()) return InteractionResult.PASS;
 
-            player.sendSystemMessage(Component.literal("§cYou cannot interact with blocks in this claimed chunk!"));
+            sendClaimDenyActionbar(player);
+            return InteractionResult.FAIL;
+        });
+    }
+
+    private static void registerUseEntityProtection() {
+        UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+            if (!(world instanceof ServerLevel serverWorld)) return InteractionResult.PASS;
+            if (entity instanceof Player && entity.getUUID().equals(player.getUUID())) return InteractionResult.PASS;
+
+            BlockPos pos = entity.blockPosition();
+            int chunkX = pos.getX() >> 4;
+            int chunkZ = pos.getZ() >> 4;
+            String dimId = serverWorld.dimension().toString();
+            ClaimManager claims = ClaimManager.get(serverWorld.getServer());
+            ClaimData claim = claims.getClaim(dimId, chunkX, chunkZ);
+            if (claim == null) return InteractionResult.PASS;
+
+            AccessRelation relation = relation(player, claim, serverWorld);
+            if (relation == AccessRelation.TEAM) return InteractionResult.PASS;
+            if (relation == AccessRelation.ALLY && claim.isAllyEntityAllowed()) return InteractionResult.PASS;
+            if (relation == AccessRelation.FOREIGN && claim.isForeignEntityAllowed()) return InteractionResult.PASS;
+
+            sendClaimDenyActionbar(player);
             return InteractionResult.FAIL;
         });
     }
@@ -195,7 +250,6 @@ public class ClaimProtectionHandler {
 
     private static void registerPvpProtection() {
         AttackEntityCallback.EVENT.register((player, world, _hand, target, _hitResult) -> {
-            if (!(target instanceof Player)) return InteractionResult.PASS;
             if (!(world instanceof ServerLevel serverWorld)) return InteractionResult.PASS;
 
             int chunkX = target.blockPosition().getX() >> 4;
@@ -205,10 +259,22 @@ public class ClaimProtectionHandler {
             ClaimData claim = claims.getClaim(dimId, chunkX, chunkZ);
             if (claim == null) return InteractionResult.PASS;
 
-            if (claim.isPvpAllowed()) return InteractionResult.PASS;
-            if (isAllowed(player, claim, serverWorld)) return InteractionResult.PASS;
+            AccessRelation relation = relation(player, claim, serverWorld);
+            if (relation == AccessRelation.TEAM) return InteractionResult.PASS;
 
-            player.sendSystemMessage(Component.literal("§cYou cannot attack players in this claimed chunk!"));
+            if (target instanceof Player) {
+                if (claim.isPvpAllowed()) return InteractionResult.PASS;
+                if (relation == AccessRelation.ALLY && claim.isAllyEntityAllowed()) return InteractionResult.PASS;
+                if (relation == AccessRelation.FOREIGN && claim.isForeignEntityAllowed()) return InteractionResult.PASS;
+
+                sendClaimDenyActionbar(player);
+                return InteractionResult.FAIL;
+            }
+
+            if (relation == AccessRelation.ALLY && claim.isAllyEntityAllowed()) return InteractionResult.PASS;
+            if (relation == AccessRelation.FOREIGN && claim.isForeignEntityAllowed()) return InteractionResult.PASS;
+
+            sendClaimDenyActionbar(player);
             return InteractionResult.FAIL;
         });
     }
@@ -217,32 +283,64 @@ public class ClaimProtectionHandler {
     // Helpers
     // -------------------------------------------------------------------------
 
-    private static boolean isAllowed(Player player, ClaimData claim, ServerLevel world) {
-        UUID uuid = player.getUUID();
-        if (claim.getOwnerUuid().equals(uuid)) return true;
-        // TODO: Add op check back when API is found
-        String teamName = claim.getTeamName();
-        if (teamName != null) {
-            TeamManager teams = TeamManager.get(world.getServer());
-            return teams.isMember(teamName, uuid);
-        }
-        return false;
+    private static AccessRelation relation(Player player, ClaimData claim, ServerLevel world) {
+        String claimTeam = claim.getTeamName();
+        if (claimTeam == null) return AccessRelation.FOREIGN;
+
+        TeamManager teams = TeamManager.get(world.getServer());
+        TeamData actorTeam = teams.getTeamForPlayer(player.getUUID());
+        if (actorTeam == null) return AccessRelation.FOREIGN;
+        if (actorTeam.getName().equalsIgnoreCase(claimTeam)) return AccessRelation.TEAM;
+        if (teams.areAllies(claimTeam, actorTeam.getName())) return AccessRelation.ALLY;
+        return AccessRelation.FOREIGN;
     }
 
     private static boolean canManageClaim(Player player, ClaimData claim, ServerLevel world) {
         UUID uuid = player.getUUID();
-        if (claim.getOwnerUuid().equals(uuid)) return true;
         if (claim.getTeamName() == null) return false;
         TeamManager teams = TeamManager.get(world.getServer());
         return teams.canManageClaims(claim.getTeamName(), uuid);
     }
 
+    private enum AccessRelation {
+        TEAM,
+        ALLY,
+        FOREIGN
+    }
+
+    private static void sendClaimDenyActionbar(Player player) {
+        if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+            serverPlayer.sendSystemMessage(CLAIM_DENY_ACTIONBAR, true);
+        } else {
+            player.sendSystemMessage(CLAIM_DENY_ACTIONBAR);
+        }
+    }
+
+    private static boolean isAlwaysAllowedUtilityBlock(BlockState state) {
+        return state.getBlock() instanceof CraftingTableBlock
+                || state.getBlock() instanceof SmithingTableBlock
+                || state.getBlock() instanceof AnvilBlock;
+    }
+
     private static void showClaimInfo(Player player, ClaimData claim, int chunkX, int chunkZ) {
-        player.sendSystemMessage(Component.literal("§6=== Claim Info ==="));
-        player.sendSystemMessage(Component.literal("§eChunk: §f" + chunkX + ", " + chunkZ));
-        player.sendSystemMessage(Component.literal("§eOwner: §f" + claim.getOwnerName()));
-        player.sendSystemMessage(Component.literal("§eTeam: §f" + (claim.getTeamName() != null ? claim.getTeamName() : "none")));
-        player.sendSystemMessage(Component.literal("§eBanner: §f" + claim.getBannerX() + ", " + claim.getBannerY() + ", " + claim.getBannerZ()));
+        player.sendSystemMessage(TextPalette.yellow("=== Claim Info ==="));
+        player.sendSystemMessage(TextPalette.join(TextPalette.yellow("Chunk: "), TextPalette.white(chunkX + ", " + chunkZ)));
+        if (player.level() instanceof ServerLevel serverLevel) {
+            player.sendSystemMessage(TextPalette.join(
+                    TextPalette.yellow("Owner: "),
+                    TextPalette.player(claim.getOwnerName(), claim.getOwnerUuid(), serverLevel.getServer())
+            ));
+        } else {
+            player.sendSystemMessage(TextPalette.join(TextPalette.yellow("Owner: "), TextPalette.white(claim.getOwnerName())));
+        }
+        player.sendSystemMessage(TextPalette.join(
+                TextPalette.yellow("Team: "),
+                TextPalette.white(claim.getTeamName() != null ? claim.getTeamName() : "None")
+        ));
+        player.sendSystemMessage(TextPalette.join(
+                TextPalette.yellow("Banner: "),
+                TextPalette.white(claim.getBannerX() + ", " + claim.getBannerY() + ", " + claim.getBannerZ())
+        ));
     }
 }
 
