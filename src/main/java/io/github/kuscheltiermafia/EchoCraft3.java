@@ -2,6 +2,7 @@ package io.github.kuscheltiermafia;
 
 import io.github.kuscheltiermafia.commands.ClaimCommand;
 import io.github.kuscheltiermafia.commands.TeamCommand;
+import io.github.kuscheltiermafia.events.ClaimExplosionProtectionHandler;
 import io.github.kuscheltiermafia.events.ClaimProtectionHandler;
 import io.github.kuscheltiermafia.events.DamageShieldHandler;
 import io.github.kuscheltiermafia.registry.ModItems;
@@ -24,6 +25,7 @@ public class EchoCraft3 implements ModInitializer {
 		// Register event handlers
 		DamageShieldHandler.register();
 		ClaimProtectionHandler.register();
+		ClaimExplosionProtectionHandler.register();
 
 		// Register commands
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {

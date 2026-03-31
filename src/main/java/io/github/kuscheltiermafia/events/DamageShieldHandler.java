@@ -21,7 +21,7 @@ public class DamageShieldHandler {
     private static final Set<UUID> processing = new HashSet<>();
 
     public static void register() {
-        ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
+        ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, _source, amount) -> {
             if (!(entity instanceof ServerPlayer player)) return true;
             UUID id = player.getUUID();
             if (processing.contains(id)) return true; // prevent recursion
@@ -68,7 +68,7 @@ public class DamageShieldHandler {
     private static ItemStack findDamageShield(Player player) {
         for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
             ItemStack stack = player.getInventory().getItem(i);
-            if (stack.is(ModItems.DAMAGE_SHIELD) && stack.getDamageValue() < stack.getMaxDamage()) {
+            if (ModItems.isDamageShield(stack) && stack.getDamageValue() < stack.getMaxDamage()) {
                 return stack;
             }
         }

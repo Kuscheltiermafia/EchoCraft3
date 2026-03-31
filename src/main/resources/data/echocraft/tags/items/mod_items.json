@@ -1,7 +1,7 @@
 {
   "values": [
-    "echocraft:damage_shield",
-    "echocraft:claim_banner"
+    "minecraft:shield",
+    "minecraft:white_banner"
   ]
 }
 

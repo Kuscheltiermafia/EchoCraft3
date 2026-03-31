@@ -12,8 +12,8 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.WallBannerBlock;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionResult;
@@ -47,15 +47,11 @@ public class ClaimProtectionHandler {
 
     private static void registerBannerPlace() {
         UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
-            if (world instanceof ServerLevel serverWorld) {
-                // only run on server
-            } else {
-                return InteractionResult.PASS;
-            }
+            if (!(world instanceof ServerLevel serverWorld)) return InteractionResult.PASS;
             if (hand != InteractionHand.MAIN_HAND) return InteractionResult.PASS;
 
             ItemStack stack = player.getMainHandItem();
-            if (!stack.is(ModItems.CLAIM_BANNER)) return InteractionResult.PASS;
+            if (!ModItems.isClaimBanner(stack)) return InteractionResult.PASS;
 
             Direction side = hitResult.getDirection();
             // Cannot attach a banner to the underside of a block
@@ -121,7 +117,7 @@ public class ClaimProtectionHandler {
     // -------------------------------------------------------------------------
 
     private static void registerBlockBreakProtection() {
-        PlayerBlockBreakEvents.BEFORE.register((world, player, pos, state, blockEntity) -> {
+        PlayerBlockBreakEvents.BEFORE.register((world, player, pos, _state, _blockEntity) -> {
             if (!(world instanceof ServerLevel serverWorld)) return true;
 
             int chunkX = pos.getX() >> 4;
@@ -134,12 +130,16 @@ public class ClaimProtectionHandler {
             if (isAllowed(player, claim, serverWorld)) {
                 BlockPos bannerPos = new BlockPos(claim.getBannerX(), claim.getBannerY(), claim.getBannerZ());
                 if (pos.equals(bannerPos)) {
+                    if (!canManageClaim(player, claim, serverWorld)) {
+                        player.sendSystemMessage(Component.literal("§cOnly the claim owner, team moderator or leader can remove this claim."));
+                        return false;
+                    }
                     // Remove block without vanilla loot drop
                     serverWorld.destroyBlock(pos, false);
                     // Return the claim banner to the player (or drop it)
                     Containers.dropItemStack(serverWorld,
                             pos.getX(), pos.getY(), pos.getZ(),
-                            new ItemStack(ModItems.CLAIM_BANNER));
+                            ModItems.createClaimBannerStack());
                     // Remove the claim data
                     claims.removeClaim(dimId, chunkX, chunkZ);
                     player.sendSystemMessage(Component.literal("§6Claim removed. Banner returned."));
@@ -147,6 +147,8 @@ public class ClaimProtectionHandler {
                 }
                 return true;
             }
+
+            if (claim.isForeignBreakAllowed()) return true;
 
             player.sendSystemMessage(Component.literal("§cYou cannot break blocks in this claimed chunk!"));
             return false;
@@ -162,7 +164,7 @@ public class ClaimProtectionHandler {
             if (!(world instanceof ServerLevel serverWorld)) return InteractionResult.PASS;
 
             // Claim banner placement is handled in the first handler above
-            if (player.getItemInHand(hand).is(ModItems.CLAIM_BANNER)) return InteractionResult.PASS;
+            if (ModItems.isClaimBanner(player.getItemInHand(hand))) return InteractionResult.PASS;
 
             BlockPos pos = hitResult.getBlockPos();
             int chunkX = pos.getX() >> 4;
@@ -174,6 +176,14 @@ public class ClaimProtectionHandler {
 
             if (isAllowed(player, claim, serverWorld)) return InteractionResult.PASS;
 
+            if (player.getItemInHand(hand).getItem() instanceof BlockItem) {
+                if (claim.isForeignPlaceAllowed()) return InteractionResult.PASS;
+                player.sendSystemMessage(Component.literal("§cYou cannot place blocks in this claimed chunk!"));
+                return InteractionResult.FAIL;
+            }
+
+            if (claim.isForeignInteractAllowed()) return InteractionResult.PASS;
+
             player.sendSystemMessage(Component.literal("§cYou cannot interact with blocks in this claimed chunk!"));
             return InteractionResult.FAIL;
         });
@@ -184,7 +194,7 @@ public class ClaimProtectionHandler {
     // -------------------------------------------------------------------------
 
     private static void registerPvpProtection() {
-        AttackEntityCallback.EVENT.register((player, world, hand, target, hitResult) -> {
+        AttackEntityCallback.EVENT.register((player, world, _hand, target, _hitResult) -> {
             if (!(target instanceof Player)) return InteractionResult.PASS;
             if (!(world instanceof ServerLevel serverWorld)) return InteractionResult.PASS;
 
@@ -195,6 +205,7 @@ public class ClaimProtectionHandler {
             ClaimData claim = claims.getClaim(dimId, chunkX, chunkZ);
             if (claim == null) return InteractionResult.PASS;
 
+            if (claim.isPvpAllowed()) return InteractionResult.PASS;
             if (isAllowed(player, claim, serverWorld)) return InteractionResult.PASS;
 
             player.sendSystemMessage(Component.literal("§cYou cannot attack players in this claimed chunk!"));
@@ -216,6 +227,14 @@ public class ClaimProtectionHandler {
             return teams.isMember(teamName, uuid);
         }
         return false;
+    }
+
+    private static boolean canManageClaim(Player player, ClaimData claim, ServerLevel world) {
+        UUID uuid = player.getUUID();
+        if (claim.getOwnerUuid().equals(uuid)) return true;
+        if (claim.getTeamName() == null) return false;
+        TeamManager teams = TeamManager.get(world.getServer());
+        return teams.canManageClaims(claim.getTeamName(), uuid);
     }
 
     private static void showClaimInfo(Player player, ClaimData claim, int chunkX, int chunkZ) {

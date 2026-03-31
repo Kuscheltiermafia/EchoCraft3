@@ -1,24 +1,40 @@
 package io.github.kuscheltiermafia.teams;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.world.level.saveddata.SavedData;
-import net.minecraft.world.level.saveddata.SavedDataType;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 
 public class TeamManager extends SavedData {
 
-    private static final String DATA_KEY = "echocraft_teams";
+    private static final Map<MinecraftServer, TeamManager> RUNTIME_INSTANCES = new WeakHashMap<>();
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final String FILE_NAME = "echocraft_teams.json";
 
     // key: lowercase team name
     private final Map<String, TeamData> teams = new HashMap<>();
+    private final Path storageFile;
 
-    public TeamManager() {}
+    public TeamManager() {
+        this.storageFile = null;
+    }
+
+    private TeamManager(Path storageFile) {
+        this.storageFile = storageFile;
+    }
 
     // -------------------------------------------------------------------------
     // Public API
@@ -35,17 +51,17 @@ public class TeamManager extends SavedData {
     public boolean createTeam(String name, UUID leaderUuid) {
         if (teams.containsKey(name.toLowerCase())) return false;
         teams.put(name.toLowerCase(), new TeamData(name, leaderUuid));
-        setDirty();
+        markDirtyAndPersist();
         return true;
     }
 
     public void saveTeam(TeamData team) {
-        setDirty();
+        markDirtyAndPersist();
     }
 
     public void removeTeam(String name) {
         teams.remove(name.toLowerCase());
-        setDirty();
+        markDirtyAndPersist();
     }
 
     /** Returns the team the given player is leader of, or null. */
@@ -65,10 +81,23 @@ public class TeamManager extends SavedData {
         return result;
     }
 
+    /** Returns one team the player is a member of, or null if none. */
+    public TeamData getTeamForPlayer(UUID uuid) {
+        for (TeamData t : teams.values()) {
+            if (t.isMember(uuid)) return t;
+        }
+        return null;
+    }
+
     /** Returns true if the given player is a member (or leader) of the team. */
     public boolean isMember(String teamName, UUID uuid) {
         TeamData t = getTeam(teamName);
         return t != null && t.isMember(uuid);
+    }
+
+    public boolean canManageClaims(String teamName, UUID uuid) {
+        TeamData t = getTeam(teamName);
+        return t != null && t.canManageClaims(uuid);
     }
 
     // -------------------------------------------------------------------------
@@ -119,7 +148,110 @@ public class TeamManager extends SavedData {
     // -------------------------------------------------------------------------
 
     public static TeamManager get(MinecraftServer server) {
-        // Simple in-memory singleton for now - TODO: implement proper persistence with SavedData API
-        return new TeamManager();
+        return RUNTIME_INSTANCES.computeIfAbsent(server, TeamManager::loadFromDisk);
+    }
+
+    private static TeamManager loadFromDisk(MinecraftServer server) {
+        Path file = server.getWorldPath(LevelResource.ROOT).resolve("data").resolve(FILE_NAME);
+        TeamManager manager = new TeamManager(file);
+        if (!Files.exists(file)) return manager;
+
+        try {
+            String raw = Files.readString(file, StandardCharsets.UTF_8);
+            JsonObject root = GSON.fromJson(raw, JsonObject.class);
+            if (root == null || !root.has("teams") || !root.get("teams").isJsonArray()) return manager;
+
+            JsonArray teamsArray = root.getAsJsonArray("teams");
+            for (JsonElement element : teamsArray) {
+                if (!element.isJsonObject()) continue;
+                JsonObject teamObj = element.getAsJsonObject();
+
+                if (!teamObj.has("name") || !teamObj.has("leader")) continue;
+                String name = teamObj.get("name").getAsString();
+                UUID leader = UUID.fromString(teamObj.get("leader").getAsString());
+
+                Set<UUID> members = readUuidSet(teamObj.getAsJsonArray("members"));
+                members.add(leader);
+                Set<UUID> invites = readUuidSet(teamObj.getAsJsonArray("pendingInvites"));
+                Map<UUID, TeamRole> roles = readRoleMap(teamObj.getAsJsonObject("roles"));
+
+                manager.teams.put(name.toLowerCase(), new TeamData(name, leader, members, invites, roles));
+            }
+        } catch (Exception ignored) {
+            // If parsing fails, keep an empty manager so the server can still run.
+        }
+
+        return manager;
+    }
+
+    private static Set<UUID> readUuidSet(JsonArray array) {
+        Set<UUID> out = new HashSet<>();
+        if (array == null) return out;
+        for (JsonElement element : array) {
+            try {
+                out.add(UUID.fromString(element.getAsString()));
+            } catch (Exception ignored) {
+                // Ignore malformed UUIDs from old/corrupt files.
+            }
+        }
+        return out;
+    }
+
+    private static Map<UUID, TeamRole> readRoleMap(JsonObject obj) {
+        Map<UUID, TeamRole> out = new HashMap<>();
+        if (obj == null) return out;
+        for (Map.Entry<String, JsonElement> entry : obj.entrySet()) {
+            try {
+                out.put(UUID.fromString(entry.getKey()), TeamRole.fromString(entry.getValue().getAsString()));
+            } catch (Exception ignored) {
+                // Ignore malformed role entries.
+            }
+        }
+        return out;
+    }
+
+    private void markDirtyAndPersist() {
+        setDirty();
+        persistToDisk();
+    }
+
+    private void persistToDisk() {
+        if (storageFile == null) return;
+        try {
+            Files.createDirectories(storageFile.getParent());
+
+            JsonArray teamsArray = new JsonArray();
+            for (TeamData team : teams.values()) {
+                JsonObject teamObj = new JsonObject();
+                teamObj.addProperty("name", team.getName());
+                teamObj.addProperty("leader", team.getLeader().toString());
+
+                JsonArray members = new JsonArray();
+                for (UUID member : team.getMembers()) {
+                    members.add(member.toString());
+                }
+                teamObj.add("members", members);
+
+                JsonArray invites = new JsonArray();
+                for (UUID invite : team.getPendingInvites()) {
+                    invites.add(invite.toString());
+                }
+                teamObj.add("pendingInvites", invites);
+
+                JsonObject roles = new JsonObject();
+                for (Map.Entry<UUID, TeamRole> entry : team.getRoles().entrySet()) {
+                    roles.addProperty(entry.getKey().toString(), entry.getValue().name());
+                }
+                teamObj.add("roles", roles);
+
+                teamsArray.add(teamObj);
+            }
+
+            JsonObject root = new JsonObject();
+            root.add("teams", teamsArray);
+            Files.writeString(storageFile, GSON.toJson(root), StandardCharsets.UTF_8);
+        } catch (Exception ignored) {
+            // Persistence errors should not crash gameplay commands.
+        }
     }
 }
