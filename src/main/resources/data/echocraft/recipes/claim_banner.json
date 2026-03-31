@@ -1,0 +1,32 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "WWW",
+    "WWW",
+    "ISI"
+  ],
+  "key": {
+    "W": {
+      "tag": "minecraft:wool"
+    },
+    "I": {
+      "item": "minecraft:iron_ingot"
+    },
+    "S": {
+      "item": "minecraft:stick"
+    }
+  },
+  "result": {
+    "id": "minecraft:white_banner",
+    "count": 1,
+    "components": {
+      "minecraft:custom_data": {
+        "echocraft_item": "claim_banner"
+      },
+      "minecraft:custom_name": {
+        "text": "Claim Banner"
+      }
+    }
+  }
+}
+

@@ -1,0 +1,44 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "show_notification": false,
+  "category": "equipment",
+  "pattern": [
+    "SXS",
+    "ITI",
+    " I "
+  ],
+  "key": {
+    "X": [
+      "minecraft:diamond"
+    ],
+    "S": [
+      "minecraft:echo_shard"
+    ],
+    "T": [
+      "minecraft:totem_of_undying"
+    ],
+    "I": [
+      "minecraft:gold_ingot"
+    ]
+  },
+  "result": {
+    "id": "minecraft:golden_nautilus_armor",
+    "components": {
+      "minecraft:custom_name": {
+        "text": "Warden Shield",
+        "type": "text",
+        "extra": [
+          ""
+        ],
+        "color": "aqua",
+        "bold": false,
+        "italic": false,
+        "underlined": false,
+        "strikethrough": false,
+        "obfuscated": false
+      },
+      "minecraft:custom_data": "{\"echocraft_item\":\"damage_shield\"}"
+    },
+    "count": 1
+  }
+}

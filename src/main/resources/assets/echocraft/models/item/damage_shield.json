@@ -1,0 +1,7 @@
+{
+  "parent": "item/handheld",
+  "textures": {
+    "layer0": "echocraft:item/damage_shield"
+  }
+}
+

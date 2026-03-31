@@ -1,0 +1,32 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "IWI",
+    "WSW",
+    "IWI"
+  ],
+  "key": {
+    "I": {
+      "item": "minecraft:iron_ingot"
+    },
+    "W": {
+      "item": "minecraft:leather"
+    },
+    "S": {
+      "item": "minecraft:shield"
+    }
+  },
+  "result": {
+    "id": "minecraft:shield",
+    "count": 1,
+    "components": {
+      "minecraft:custom_data": {
+        "echocraft_item": "damage_shield"
+      },
+      "minecraft:custom_name": {
+        "text": "Damage Shield"
+      }
+    }
+  }
+}
+

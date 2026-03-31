@@ -3,35 +3,22 @@
 	"id": "echocraft",
 	"version": "${version}",
 	"name": "EchoCraft3",
-	"description": "This is an example description! Tell everyone what your mod is about!",
+	"description": "Server-side mod: Damage Shield item, chunk claim banners, and team management.",
 	"authors": [
-		"Me!"
+		"Kuscheltiermafia"
 	],
 	"contact": {
-		"homepage": "https://fabricmc.net/",
-		"sources": "https://github.com/FabricMC/fabric-example-mod"
+		"sources": "https://github.com/Kuscheltiermafia/EchoCraft3"
 	},
 	"license": "CC0-1.0",
 	"icon": "assets/echocraft/icon.png",
-	"environment": "*",
+	"environment": "server",
 	"entrypoints": {
 		"main": [
 			"io.github.kuscheltiermafia.EchoCraft3"
-		],
-		"client": [
-			"io.github.kuscheltiermafia.EchoCraft3Client"
-		],
-		"fabric-datagen": [
-			"io.github.kuscheltiermafia.EchoCraft3DataGenerator"
 		]
 	},
-	"mixins": [
-		"echocraft.mixins.json",
-		{
-			"config": "echocraft.client.mixins.json",
-			"environment": "client"
-		}
-	],
+	"mixins": [],
 	"depends": {
 		"fabricloader": ">=0.18.5",
 		"minecraft": "~26.1",
