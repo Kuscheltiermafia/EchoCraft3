@@ -5,6 +5,10 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import io.github.kuscheltiermafia.claims.ClaimManager;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.TextColor;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
@@ -49,6 +53,64 @@ public class TeamManager extends SavedData {
         return teams.get(name.toLowerCase());
     }
 
+    public String getDisplayName(String teamName) {
+        TeamData team = getTeam(teamName);
+        if (team == null) return teamName;
+        String display = team.getDisplayName();
+        return (display == null || display.isBlank()) ? team.getName() : display;
+    }
+
+    public Component getDisplayComponent(String teamName) {
+        TeamData team = getTeam(teamName);
+        if (team == null) {
+            return Component.literal(teamName).withStyle(ChatFormatting.YELLOW);
+        }
+        return getDisplayComponent(team);
+    }
+
+    public Component getDisplayComponent(TeamData team) {
+        if (team == null) {
+            return Component.literal("Unknown Team").withStyle(ChatFormatting.YELLOW);
+        }
+        String label = getDisplayName(team.getName());
+        String colorToken = team.getTeamNameColor();
+        if (colorToken != null && colorToken.startsWith("#") && colorToken.length() == 7) {
+            try {
+                int rgb = Integer.parseInt(colorToken.substring(1), 16);
+                TextColor color = TextColor.fromRgb(rgb);
+                if (color != null) {
+                    return Component.literal(label).withStyle(style -> style.withColor(color));
+                }
+            } catch (NumberFormatException ignored) {
+                // Fallback to named color handling below.
+            }
+        }
+        return Component.literal(label).withStyle(resolveTeamColor(colorToken));
+    }
+
+    public ChatFormatting resolveTeamColor(String token) {
+        if (token == null) return ChatFormatting.YELLOW;
+        return switch (token.toLowerCase()) {
+            case "white" -> ChatFormatting.WHITE;
+            case "gray" -> ChatFormatting.GRAY;
+            case "dark_gray" -> ChatFormatting.DARK_GRAY;
+            case "black" -> ChatFormatting.BLACK;
+            case "red" -> ChatFormatting.RED;
+            case "dark_red" -> ChatFormatting.DARK_RED;
+            case "gold" -> ChatFormatting.GOLD;
+            case "yellow" -> ChatFormatting.YELLOW;
+            case "green" -> ChatFormatting.GREEN;
+            case "dark_green" -> ChatFormatting.DARK_GREEN;
+            case "aqua" -> ChatFormatting.AQUA;
+            case "dark_aqua" -> ChatFormatting.DARK_AQUA;
+            case "blue" -> ChatFormatting.BLUE;
+            case "dark_blue" -> ChatFormatting.DARK_BLUE;
+            case "light_purple" -> ChatFormatting.LIGHT_PURPLE;
+            case "dark_purple" -> ChatFormatting.DARK_PURPLE;
+            default -> ChatFormatting.YELLOW;
+        };
+    }
+
     public boolean createTeam(String name, UUID leaderUuid) {
         if (teams.containsKey(name.toLowerCase())) return false;
         teams.put(name.toLowerCase(), new TeamData(name, leaderUuid));
@@ -62,7 +124,9 @@ public class TeamManager extends SavedData {
 
     public void removeTeam(String name) {
         String key = name.toLowerCase();
+
         teams.remove(key);
+
         for (TeamData team : teams.values()) {
             team.removeAlly(key);
         }
@@ -231,6 +295,8 @@ public class TeamManager extends SavedData {
                 if (!teamObj.has("name") || !teamObj.has("leader")) continue;
                 String name = teamObj.get("name").getAsString();
                 UUID leader = UUID.fromString(teamObj.get("leader").getAsString());
+                String displayName = teamObj.has("displayName") ? teamObj.get("displayName").getAsString() : name;
+                String teamNameColor = teamObj.has("teamNameColor") ? teamObj.get("teamNameColor").getAsString() : "yellow";
 
                 Set<UUID> members = readUuidSet(teamObj.getAsJsonArray("members"));
                 members.add(leader);
@@ -239,7 +305,7 @@ public class TeamManager extends SavedData {
                 Set<String> allies = readStringSet(teamObj.getAsJsonArray("allies"));
                 Set<String> allyInvites = readStringSet(teamObj.getAsJsonArray("pendingAllyInvites"));
 
-                manager.teams.put(name.toLowerCase(), new TeamData(name, leader, members, invites, roles, allies, allyInvites));
+                manager.teams.put(name.toLowerCase(), new TeamData(name, displayName, teamNameColor, leader, members, invites, roles, allies, allyInvites));
             }
         } catch (Exception ignored) {
             // If parsing fails, keep an empty manager so the server can still run.
@@ -301,6 +367,8 @@ public class TeamManager extends SavedData {
             for (TeamData team : teams.values()) {
                 JsonObject teamObj = new JsonObject();
                 teamObj.addProperty("name", team.getName());
+                teamObj.addProperty("displayName", team.getDisplayName());
+                teamObj.addProperty("teamNameColor", team.getTeamNameColor());
                 teamObj.addProperty("leader", team.getLeader().toString());
 
                 JsonArray members = new JsonArray();

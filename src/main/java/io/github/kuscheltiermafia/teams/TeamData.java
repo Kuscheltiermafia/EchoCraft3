@@ -9,6 +9,8 @@ import java.util.UUID;
 public class TeamData {
 
     private final String name;
+    private String displayName;
+    private String teamNameColor;
     private UUID leader;
     private final Set<UUID> members = new HashSet<>();
     private final Set<UUID> pendingInvites = new HashSet<>();
@@ -18,15 +20,19 @@ public class TeamData {
 
     public TeamData(String name, UUID leader) {
         this.name = name;
+        this.displayName = name;
+        this.teamNameColor = "yellow";
         this.leader = leader;
         this.members.add(leader);
         this.roles.put(leader, TeamRole.LEADER);
     }
 
     // Raw constructor for deserialization
-    TeamData(String name, UUID leader, Set<UUID> members, Set<UUID> pendingInvites, Map<UUID, TeamRole> roles,
+    TeamData(String name, String displayName, String teamNameColor, UUID leader, Set<UUID> members, Set<UUID> pendingInvites, Map<UUID, TeamRole> roles,
              Set<String> allies, Set<String> pendingAllyInvites) {
         this.name = name;
+        this.displayName = (displayName == null || displayName.isBlank()) ? name : displayName;
+        this.teamNameColor = (teamNameColor == null || teamNameColor.isBlank()) ? "yellow" : teamNameColor;
         this.leader = leader;
         this.members.addAll(members);
         this.pendingInvites.addAll(pendingInvites);
@@ -41,6 +47,23 @@ public class TeamData {
     }
 
     public String getName() { return name; }
+    public String getDisplayName() { return displayName; }
+    public String getTeamNameColor() { return teamNameColor; }
+    public void setDisplayName(String displayName) {
+        if (displayName == null || displayName.isBlank()) {
+            this.displayName = name;
+            return;
+        }
+        this.displayName = displayName;
+    }
+
+    public void setTeamNameColor(String teamNameColor) {
+        if (teamNameColor == null || teamNameColor.isBlank()) {
+            this.teamNameColor = "yellow";
+            return;
+        }
+        this.teamNameColor = teamNameColor;
+    }
     public UUID getLeader() {
         for (Map.Entry<UUID, TeamRole> entry : roles.entrySet()) {
             if (entry.getValue() == TeamRole.LEADER) return entry.getKey();

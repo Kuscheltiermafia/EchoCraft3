@@ -5,8 +5,10 @@ import io.github.kuscheltiermafia.claims.ClaimManager;
 import io.github.kuscheltiermafia.registry.ModItems;
 import io.github.kuscheltiermafia.teams.TeamData;
 import io.github.kuscheltiermafia.teams.TeamManager;
+import io.github.kuscheltiermafia.users.UserSettingsManager;
 import io.github.kuscheltiermafia.util.TextPalette;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
@@ -29,6 +31,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -39,7 +43,7 @@ import java.util.UUID;
  *  - Block break / interact / PvP in claimed chunks is denied for non-members.
  */
 public class ClaimProtectionHandler {
-    private static final Component CLAIM_DENY_ACTIONBAR = TextPalette.red("You can't do that in this claimed chunk");
+    private static final Map<UUID, String> LAST_TEAM_TERRITORY = new HashMap<>();
 
     public static void register() {
         registerBannerPlace();
@@ -47,6 +51,7 @@ public class ClaimProtectionHandler {
         registerUseBlockProtection();
         registerUseEntityProtection();
         registerPvpProtection();
+        registerTerritoryActionbars();
     }
 
     // -------------------------------------------------------------------------
@@ -87,15 +92,10 @@ public class ClaimProtectionHandler {
             ClaimData existing = claims.getClaim(dimId, chunkX, chunkZ);
 
             if (existing != null) {
-                if (existing.getOwnerUuid().equals(player.getUUID())) {
-                    showClaimInfo(player, existing, chunkX, chunkZ);
-                } else {
-                    player.sendSystemMessage(TextPalette.join(
-                            TextPalette.white("This chunk is already claimed by "),
-                            TextPalette.player(existing.getOwnerName(), existing.getOwnerUuid(), serverWorld.getServer()),
-                            TextPalette.white(".")
-                    ));
-                }
+                sendActionbar(player, TextPalette.join(
+                        TextPalette.white("This chunk is already claimed by: "),
+                        resolveClaimTeamDisplay(existing, serverWorld)
+                ));
                 return InteractionResult.FAIL;
             }
 
@@ -119,6 +119,8 @@ public class ClaimProtectionHandler {
                     bannerPos.getX(), bannerPos.getY(), bannerPos.getZ()
             );
             claims.setTeam(dimId, chunkX, chunkZ, playerTeam.getName());
+            // Use another claim of the same team as template so new claims inherit current team rules.
+            claims.cloneSettingsFromExistingTeamClaim(playerTeam.getName(), dimId, chunkX, chunkZ);
 
             if (!player.isCreative()) {
                 stack.shrink(1);
@@ -174,7 +176,7 @@ public class ClaimProtectionHandler {
 
             if (claim.isForeignBreakAllowed()) return true;
 
-            sendClaimDenyActionbar(player);
+            sendClaimDenyActionbar(player, claim, serverWorld);
             return false;
         });
     }
@@ -209,14 +211,14 @@ public class ClaimProtectionHandler {
             if (player.getItemInHand(hand).getItem() instanceof BlockItem) {
                 if (relation == AccessRelation.ALLY && claim.isAllyPlaceAllowed()) return InteractionResult.PASS;
                 if (relation == AccessRelation.FOREIGN && claim.isForeignPlaceAllowed()) return InteractionResult.PASS;
-                sendClaimDenyActionbar(player);
+                sendClaimDenyActionbar(player, claim, serverWorld);
                 return InteractionResult.FAIL;
             }
 
             if (relation == AccessRelation.ALLY && claim.isAllyInteractAllowed()) return InteractionResult.PASS;
             if (relation == AccessRelation.FOREIGN && claim.isForeignInteractAllowed()) return InteractionResult.PASS;
 
-            sendClaimDenyActionbar(player);
+            sendClaimDenyActionbar(player, claim, serverWorld);
             return InteractionResult.FAIL;
         });
     }
@@ -239,7 +241,7 @@ public class ClaimProtectionHandler {
             if (relation == AccessRelation.ALLY && claim.isAllyEntityAllowed()) return InteractionResult.PASS;
             if (relation == AccessRelation.FOREIGN && claim.isForeignEntityAllowed()) return InteractionResult.PASS;
 
-            sendClaimDenyActionbar(player);
+            sendClaimDenyActionbar(player, claim, serverWorld);
             return InteractionResult.FAIL;
         });
     }
@@ -267,15 +269,57 @@ public class ClaimProtectionHandler {
                 if (relation == AccessRelation.ALLY && claim.isAllyEntityAllowed()) return InteractionResult.PASS;
                 if (relation == AccessRelation.FOREIGN && claim.isForeignEntityAllowed()) return InteractionResult.PASS;
 
-                sendClaimDenyActionbar(player);
+                sendClaimDenyActionbar(player, claim, serverWorld);
                 return InteractionResult.FAIL;
             }
 
             if (relation == AccessRelation.ALLY && claim.isAllyEntityAllowed()) return InteractionResult.PASS;
             if (relation == AccessRelation.FOREIGN && claim.isForeignEntityAllowed()) return InteractionResult.PASS;
 
-            sendClaimDenyActionbar(player);
+            sendClaimDenyActionbar(player, claim, serverWorld);
             return InteractionResult.FAIL;
+        });
+    }
+
+    private static void registerTerritoryActionbars() {
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            UserSettingsManager userSettings = UserSettingsManager.get(server);
+            for (ServerLevel world : server.getAllLevels()) {
+                ClaimManager claims = ClaimManager.get(server);
+                for (net.minecraft.server.level.ServerPlayer player : world.players()) {
+                    UUID uuid = player.getUUID();
+                    String previousTeam = LAST_TEAM_TERRITORY.get(uuid);
+                    String currentTeam = currentClaimTeam(player, claims);
+                    if ((previousTeam == null && currentTeam == null)
+                            || (previousTeam != null && previousTeam.equalsIgnoreCase(currentTeam))) {
+                        continue;
+                    }
+
+                    if (userSettings.isTerritoryNotificationEnabled(uuid)) {
+                        TeamManager teams = TeamManager.get(server);
+                        if (previousTeam != null && (currentTeam == null || !previousTeam.equalsIgnoreCase(currentTeam))) {
+                            sendActionbar(player, TextPalette.join(
+                                    TextPalette.white("You are now leaving "),
+                                    teams.getDisplayComponent(previousTeam),
+                                    TextPalette.white(" territory")
+                            ));
+                        }
+                        if (currentTeam != null && (previousTeam == null || !currentTeam.equalsIgnoreCase(previousTeam))) {
+                            sendActionbar(player, TextPalette.join(
+                                    TextPalette.white("You are now entering "),
+                                    teams.getDisplayComponent(currentTeam),
+                                    TextPalette.white(" territory")
+                            ));
+                        }
+                    }
+
+                    if (currentTeam == null) {
+                        LAST_TEAM_TERRITORY.remove(uuid);
+                    } else {
+                        LAST_TEAM_TERRITORY.put(uuid, currentTeam);
+                    }
+                }
+            }
         });
     }
 
@@ -308,12 +352,41 @@ public class ClaimProtectionHandler {
         FOREIGN
     }
 
-    private static void sendClaimDenyActionbar(Player player) {
-        if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
-            serverPlayer.sendSystemMessage(CLAIM_DENY_ACTIONBAR, true);
-        } else {
-            player.sendSystemMessage(CLAIM_DENY_ACTIONBAR);
+    private static String currentClaimTeam(net.minecraft.server.level.ServerPlayer player, ClaimManager claims) {
+        BlockPos pos = player.blockPosition();
+        int chunkX = pos.getX() >> 4;
+        int chunkZ = pos.getZ() >> 4;
+        String dimId = player.level().dimension().toString();
+        ClaimData claim = claims.getClaim(dimId, chunkX, chunkZ);
+        return claim != null ? claim.getTeamName() : null;
+    }
+
+    private static void sendClaimDenyActionbar(Player player, ClaimData claim, ServerLevel world) {
+        UserSettingsManager settings = UserSettingsManager.get(world.getServer());
+        if (!settings.isClaimDenyNotificationEnabled(player.getUUID())) {
+            return;
         }
+        sendActionbar(player, TextPalette.join(
+                TextPalette.red("You can't do that in "),
+                resolveClaimTeamDisplay(claim, world),
+                TextPalette.red(" territory")
+        ));
+    }
+
+    private static Component resolveClaimTeamDisplay(ClaimData claim, ServerLevel world) {
+        if (claim.getTeamName() == null || claim.getTeamName().isBlank()) {
+            return TextPalette.white(claim.getOwnerName());
+        }
+        TeamManager teams = TeamManager.get(world.getServer());
+        return teams.getDisplayComponent(claim.getTeamName());
+    }
+
+    private static void sendActionbar(Player player, Component message) {
+        if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+            serverPlayer.sendSystemMessage(message, true);
+            return;
+        }
+        player.sendSystemMessage(message);
     }
 
     private static boolean isAlwaysAllowedUtilityBlock(BlockState state) {
@@ -335,7 +408,9 @@ public class ClaimProtectionHandler {
         }
         player.sendSystemMessage(TextPalette.join(
                 TextPalette.yellow("Team: "),
-                TextPalette.white(claim.getTeamName() != null ? claim.getTeamName() : "None")
+                player.level() instanceof ServerLevel serverLevel && claim.getTeamName() != null
+                        ? TeamManager.get(serverLevel.getServer()).getDisplayComponent(claim.getTeamName())
+                        : TextPalette.white(claim.getTeamName() != null ? claim.getTeamName() : "None")
         ));
         player.sendSystemMessage(TextPalette.join(
                 TextPalette.yellow("Banner: "),

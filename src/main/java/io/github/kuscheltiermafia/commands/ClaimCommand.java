@@ -1,6 +1,7 @@
 package io.github.kuscheltiermafia.commands;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import io.github.kuscheltiermafia.claims.ClaimData;
 import io.github.kuscheltiermafia.claims.ClaimManager;
@@ -40,13 +41,10 @@ public class ClaimCommand {
                 Commands.literal("claim")
                         .then(Commands.literal("info")
                                 .executes(ctx -> info(ctx.getSource())))
-                        .then(Commands.literal("team")
-                                .executes(ctx -> linkTeam(ctx.getSource())))
                         .then(Commands.literal("settings")
                                 .executes(ctx -> showMenu(ctx.getSource())))
                         .then(buildToggleCommand())
-                        .then(Commands.literal("remove")
-                                .executes(ctx -> remove(ctx.getSource())))
+                        .then(buildToggleDialogCommand())
         );
     }
 
@@ -104,6 +102,20 @@ public class ClaimCommand {
                         .then(Commands.literal("off").executes(ctx -> toggle(ctx.getSource(), "ally_entity", false))));
     }
 
+    private static LiteralArgumentBuilder<CommandSourceStack> buildToggleDialogCommand() {
+        return Commands.literal("toggle_dialog")
+                .then(Commands.literal("explosions").executes(ctx -> toggleFromDialog(ctx.getSource(), "explosions")))
+                .then(Commands.literal("pvp").executes(ctx -> toggleFromDialog(ctx.getSource(), "pvp")))
+                .then(Commands.literal("foreign_break").executes(ctx -> toggleFromDialog(ctx.getSource(), "foreign_break")))
+                .then(Commands.literal("foreign_place").executes(ctx -> toggleFromDialog(ctx.getSource(), "foreign_place")))
+                .then(Commands.literal("foreign_interact").executes(ctx -> toggleFromDialog(ctx.getSource(), "foreign_interact")))
+                .then(Commands.literal("foreign_entity").executes(ctx -> toggleFromDialog(ctx.getSource(), "foreign_entity")))
+                .then(Commands.literal("ally_break").executes(ctx -> toggleFromDialog(ctx.getSource(), "ally_break")))
+                .then(Commands.literal("ally_place").executes(ctx -> toggleFromDialog(ctx.getSource(), "ally_place")))
+                .then(Commands.literal("ally_interact").executes(ctx -> toggleFromDialog(ctx.getSource(), "ally_interact")))
+                .then(Commands.literal("ally_entity").executes(ctx -> toggleFromDialog(ctx.getSource(), "ally_entity")));
+    }
+
     // -------------------------------------------------------------------------
 
     private static int info(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -120,12 +132,13 @@ public class ClaimCommand {
             return 1;
         }
 
-        String teamName = claim.getTeamName() != null && !claim.getTeamName().isBlank()
-                ? claim.getTeamName()
-                : "Unknown Team";
+        TeamManager teams = TeamManager.get(source.getServer());
+        Component teamComponent = claim.getTeamName() != null && !claim.getTeamName().isBlank()
+                ? teams.getDisplayComponent(claim.getTeamName())
+                : TextPalette.yellow("Unknown Team");
         source.sendSuccess(() -> TextPalette.join(
                 TextPalette.white("This chunk is claimed by "),
-                TextPalette.yellow(teamName),
+                teamComponent,
                 TextPalette.white(".")
         ), false);
         return 1;
@@ -204,6 +217,26 @@ public class ClaimCommand {
         return 1;
     }
 
+    private static int toggleFromDialog(CommandSourceStack source, String key) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        ClaimData claim = getCurrentClaim(source, player);
+        if (claim == null) {
+            source.sendSuccess(() -> TextPalette.white("This chunk is not claimed."), false);
+            return 0;
+        }
+
+        int result = toggle(source, key, !getSettingValue(claim, key));
+        if (result != 1) {
+            return result;
+        }
+
+        ClaimData updatedClaim = getCurrentClaim(source, player);
+        if (updatedClaim != null) {
+            openClaimSettingsDialog(player, updatedClaim);
+        }
+        return 1;
+    }
+
     private static int showMenu(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayer player = source.getPlayerOrException();
         ClaimData claim = getCurrentClaim(source, player);
@@ -273,14 +306,13 @@ public class ClaimCommand {
     }
 
     private static ActionButton toggleDialogButton(String label, boolean currentAllowed, String key) {
-        String next = currentAllowed ? "disallowed" : "allowed";
         Component text = TextPalette.join(
                 TextPalette.white(label + ": "),
                 TextPalette.status(currentAllowed)
         );
         return new ActionButton(
                 new CommonButtonData(text, 180),
-                Optional.of(new StaticAction(new ClickEvent.RunCommand("/claim toggle " + key + " " + next)))
+                Optional.of(new StaticAction(new ClickEvent.RunCommand("/claim toggle_dialog " + key)))
         );
     }
 
@@ -307,5 +339,21 @@ public class ClaimCommand {
         String dimId = player.level().dimension().toString();
         ClaimManager claims = ClaimManager.get(source.getServer());
         return claims.getClaim(dimId, chunkPos.x(), chunkPos.z());
+    }
+
+    private static boolean getSettingValue(ClaimData claim, String key) {
+        return switch (key) {
+            case "explosions" -> claim.isExplosionsAllowed();
+            case "pvp" -> claim.isPvpAllowed();
+            case "foreign_break" -> claim.isForeignBreakAllowed();
+            case "foreign_place" -> claim.isForeignPlaceAllowed();
+            case "foreign_interact" -> claim.isForeignInteractAllowed();
+            case "foreign_entity" -> claim.isForeignEntityAllowed();
+            case "ally_break" -> claim.isAllyBreakAllowed();
+            case "ally_place" -> claim.isAllyPlaceAllowed();
+            case "ally_interact" -> claim.isAllyInteractAllowed();
+            case "ally_entity" -> claim.isAllyEntityAllowed();
+            default -> false;
+        };
     }
 }

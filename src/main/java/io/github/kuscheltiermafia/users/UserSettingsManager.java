@@ -24,6 +24,8 @@ public class UserSettingsManager {
     private static final String DEFAULT_COLOR_TOKEN = LocatorBarColor.WHITE.token();
 
     private final Map<UUID, String> locatorColors = new HashMap<>();
+    private final Map<UUID, Boolean> territoryNotifications = new HashMap<>();
+    private final Map<UUID, Boolean> claimDenyNotifications = new HashMap<>();
     private final Path storageFile;
 
     private UserSettingsManager(Path storageFile) {
@@ -64,6 +66,24 @@ public class UserSettingsManager {
         return true;
     }
 
+    public boolean isTerritoryNotificationEnabled(UUID uuid) {
+        return territoryNotifications.getOrDefault(uuid, true);
+    }
+
+    public void setTerritoryNotificationEnabled(UUID uuid, boolean enabled) {
+        territoryNotifications.put(uuid, enabled);
+        persistToDisk();
+    }
+
+    public boolean isClaimDenyNotificationEnabled(UUID uuid) {
+        return claimDenyNotifications.getOrDefault(uuid, true);
+    }
+
+    public void setClaimDenyNotificationEnabled(UUID uuid, boolean enabled) {
+        claimDenyNotifications.put(uuid, enabled);
+        persistToDisk();
+    }
+
     private static UserSettingsManager loadFromDisk(MinecraftServer server) {
         Path file = server.getWorldPath(LevelResource.ROOT).resolve("data").resolve(FILE_NAME);
         UserSettingsManager manager = new UserSettingsManager(file);
@@ -90,6 +110,28 @@ public class UserSettingsManager {
                     // Ignore malformed entries and keep gameplay stable.
                 }
             }
+
+            if (root.has("territoryNotifications") && root.get("territoryNotifications").isJsonObject()) {
+                JsonObject notifications = root.getAsJsonObject("territoryNotifications");
+                for (Map.Entry<String, JsonElement> entry : notifications.entrySet()) {
+                    try {
+                        manager.territoryNotifications.put(UUID.fromString(entry.getKey()), entry.getValue().getAsBoolean());
+                    } catch (Exception ignored) {
+                        // Ignore malformed entries and keep gameplay stable.
+                    }
+                }
+            }
+
+            if (root.has("claimDenyNotifications") && root.get("claimDenyNotifications").isJsonObject()) {
+                JsonObject notifications = root.getAsJsonObject("claimDenyNotifications");
+                for (Map.Entry<String, JsonElement> entry : notifications.entrySet()) {
+                    try {
+                        manager.claimDenyNotifications.put(UUID.fromString(entry.getKey()), entry.getValue().getAsBoolean());
+                    } catch (Exception ignored) {
+                        // Ignore malformed entries and keep gameplay stable.
+                    }
+                }
+            }
         } catch (Exception ignored) {
             // Keep defaults if reading/parsing fails.
         }
@@ -112,6 +154,18 @@ public class UserSettingsManager {
                 }
             }
             root.add("locatorColors", colors);
+
+            JsonObject territory = new JsonObject();
+            for (Map.Entry<UUID, Boolean> entry : territoryNotifications.entrySet()) {
+                territory.addProperty(entry.getKey().toString(), entry.getValue());
+            }
+            root.add("territoryNotifications", territory);
+
+            JsonObject deny = new JsonObject();
+            for (Map.Entry<UUID, Boolean> entry : claimDenyNotifications.entrySet()) {
+                deny.addProperty(entry.getKey().toString(), entry.getValue());
+            }
+            root.add("claimDenyNotifications", deny);
 
             Files.writeString(storageFile, GSON.toJson(root), StandardCharsets.UTF_8);
         } catch (Exception ignored) {

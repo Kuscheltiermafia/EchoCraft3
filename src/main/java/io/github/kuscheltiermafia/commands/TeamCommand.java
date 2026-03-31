@@ -2,11 +2,21 @@ package io.github.kuscheltiermafia.commands;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import io.github.kuscheltiermafia.claims.ClaimData;
+import io.github.kuscheltiermafia.claims.ClaimManager;
+import io.github.kuscheltiermafia.registry.ModItems;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.CommandBuildContext;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.Holder;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.Containers;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.ClickEvent;
@@ -15,11 +25,15 @@ import net.minecraft.server.dialog.ActionButton;
 import net.minecraft.server.dialog.CommonButtonData;
 import net.minecraft.server.dialog.CommonDialogData;
 import net.minecraft.server.dialog.DialogAction;
+import net.minecraft.server.dialog.Input;
 import net.minecraft.server.dialog.MultiActionDialog;
+import net.minecraft.server.dialog.action.Action;
 import net.minecraft.server.dialog.action.StaticAction;
+import net.minecraft.server.dialog.input.TextInput;
 import io.github.kuscheltiermafia.teams.TeamData;
 import io.github.kuscheltiermafia.teams.TeamManager;
 import io.github.kuscheltiermafia.teams.TeamRole;
+import io.github.kuscheltiermafia.users.LocatorBarColor;
 import io.github.kuscheltiermafia.util.TextPalette;
 
 import java.util.ArrayList;
@@ -60,6 +74,32 @@ public class TeamCommand {
                                         .executes(ctx -> settingsMember(
                                                 ctx.getSource(),
                                                 StringArgumentType.getString(ctx, "member")
+                                        ))))
+                        .then(Commands.literal("settings_color")
+                                .executes(ctx -> openTeamColorSettings(ctx.getSource())))
+                        .then(Commands.literal("teamname")
+                                .then(Commands.argument("value", StringArgumentType.greedyString())
+                                        .executes(ctx -> setTeamName(
+                                                ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "value")
+                                        ))))
+                        .then(Commands.literal("teamnamecolor")
+                                .then(Commands.argument("value", StringArgumentType.word())
+                                        .executes(ctx -> setTeamNameColor(
+                                                ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "value")
+                                        ))))
+                        .then(Commands.literal("teamnamecolor_refresh")
+                                .then(Commands.argument("value", StringArgumentType.word())
+                                        .executes(ctx -> setTeamNameColorAndRefresh(
+                                                ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "value")
+                                        ))))
+                        .then(Commands.literal("teamnamecolor_hex_refresh")
+                                .then(Commands.argument("value", StringArgumentType.word())
+                                        .executes(ctx -> setTeamNameHexColorAndRefresh(
+                                                ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "value")
                                         ))))
                         .then(Commands.literal("allies")
                                 .then(Commands.literal("invite")
@@ -112,9 +152,10 @@ public class TeamCommand {
             ), false);
             return 0;
         }
+        TeamData created = teams.getTeam(teamName);
         source.sendSuccess(() -> TextPalette.join(
                 TextPalette.white("Team "),
-                TextPalette.yellow(teamName),
+                created != null ? teams.getDisplayComponent(created) : TextPalette.yellow(teamName),
                 TextPalette.white(" created.")
         ), false);
         return 1;
@@ -168,11 +209,14 @@ public class TeamCommand {
                         .withColor(ChatFormatting.GREEN)
                         .withUnderlined(true)
                         .withClickEvent(new ClickEvent.RunCommand("/echoteam accept " + team.getName()))
-                        .withHoverEvent(new HoverEvent.ShowText(Component.literal("Accept invite to " + team.getName()))));
+                        .withHoverEvent(new HoverEvent.ShowText(TextPalette.join(
+                                TextPalette.white("Accept invite to "),
+                                teams.getDisplayComponent(team)
+                        ))));
 
         target.sendSystemMessage(TextPalette.join(
                 TextPalette.white("You have been invited to team "),
-                TextPalette.yellow(team.getName()),
+                teams.getDisplayComponent(team),
                 TextPalette.white(". "),
                 clickAccept
         ));
@@ -180,7 +224,7 @@ public class TeamCommand {
                 TextPalette.white("Invited "),
                 TextPalette.yellow(targetName),
                 TextPalette.white(" to "),
-                TextPalette.yellow(team.getName()),
+                teams.getDisplayComponent(team),
                 TextPalette.white(".")
         ), false);
         return 1;
@@ -198,17 +242,29 @@ public class TeamCommand {
 
         TeamData team = teams.getTeam(teamName);
         if (team == null) {
-            source.sendSuccess(() -> Component.literal("§cTeam §e" + teamName + " §cdoes not exist."), false);
+            source.sendSuccess(() -> TextPalette.join(
+                    TextPalette.red("Team "),
+                    TextPalette.yellow(teamName),
+                    TextPalette.red(" does not exist.")
+            ), false);
             return 0;
         }
         if (!team.isInvited(player.getUUID())) {
-            source.sendSuccess(() -> Component.literal("§cYou have not been invited to §e" + teamName + "§c."), false);
+            source.sendSuccess(() -> TextPalette.join(
+                    TextPalette.red("You have not been invited to "),
+                    teams.getDisplayComponent(team),
+                    TextPalette.red(".")
+            ), false);
             return 0;
         }
 
         team.acceptInvite(player.getUUID());
         teams.saveTeam(team);
-        source.sendSuccess(() -> Component.literal("§aYou joined team §e" + team.getName() + "§a!"), false);
+        source.sendSuccess(() -> TextPalette.join(
+                Component.literal("You joined team ").withStyle(ChatFormatting.GREEN),
+                teams.getDisplayComponent(team),
+                Component.literal("!").withStyle(ChatFormatting.GREEN)
+        ), false);
         return 1;
     }
 
@@ -229,13 +285,221 @@ public class TeamCommand {
 
         team.removeMember(player.getUUID());
         if (team.getMembers().isEmpty()) {
+            ClaimManager claims = ClaimManager.get(source.getServer());
+            List<ClaimData> teamClaims = claims.getAllClaims().stream()
+                    .filter(c -> c.getTeamName() != null && c.getTeamName().equalsIgnoreCase(team.getName()))
+                    .toList();
+            breakTeamBannersWithEffect(source, teamClaims);
+            int removedClaims = claims.removeClaimsByTeam(team.getName());
+            giveClaimBanners(player, removedClaims);
             teams.removeTeam(team.getName());
-            source.sendSuccess(() -> Component.literal("§6Team §e" + team.getName() + " §6has been disbanded (no members left)."), false);
+            source.sendSuccess(() -> TextPalette.join(
+                    Component.literal("Team ").withStyle(ChatFormatting.GOLD),
+                    teams.getDisplayComponent(team),
+                    Component.literal(" has been disbanded (no members left). ").withStyle(ChatFormatting.GOLD)
+            ), false);
+            if (removedClaims > 0) {
+                source.sendSuccess(() -> Component.literal("§e" + removedClaims + " claim banner(s) were returned to you."), false);
+            }
         } else {
             teams.saveTeam(team);
-            source.sendSuccess(() -> Component.literal("§aYou left team §e" + team.getName() + "§a."), false);
+            source.sendSuccess(() -> TextPalette.join(
+                    Component.literal("You left team ").withStyle(ChatFormatting.GREEN),
+                    teams.getDisplayComponent(team),
+                    Component.literal(".").withStyle(ChatFormatting.GREEN)
+            ), false);
         }
         return 1;
+    }
+
+    private static int setTeamName(CommandSourceStack source, String rawTeamName) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        TeamManager teams = TeamManager.get(source.getServer());
+        TeamData team = teams.getTeamForPlayer(player.getUUID());
+        if (team == null) {
+            source.sendSuccess(() -> Component.literal("§cYou are not in a team."), false);
+            return 0;
+        }
+        if (!team.isLeader(player.getUUID())) {
+            source.sendSuccess(() -> Component.literal("§cOnly team leaders can change the teamname."), false);
+            return 0;
+        }
+
+        String value = rawTeamName == null ? "" : rawTeamName.trim();
+        if (value.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("§cTeamname cannot be empty."), false);
+            return 0;
+        }
+        if (value.length() > 32) {
+            source.sendSuccess(() -> Component.literal("§cTeamname is too long (max 32 characters)."), false);
+            return 0;
+        }
+
+        team.setDisplayName(value);
+        teams.saveTeam(team);
+        source.sendSuccess(() -> TextPalette.join(
+                TextPalette.white("Teamname set to "),
+                teams.getDisplayComponent(team),
+                TextPalette.white(".")
+        ), false);
+        return 1;
+    }
+
+    private static int setTeamNameColor(CommandSourceStack source, String rawColor) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        TeamManager teams = TeamManager.get(source.getServer());
+        TeamData team = teams.getTeamForPlayer(player.getUUID());
+        if (team == null) {
+            source.sendSuccess(() -> Component.literal("§cYou are not in a team."), false);
+            return 0;
+        }
+        if (!team.isLeader(player.getUUID())) {
+            source.sendSuccess(() -> Component.literal("§cOnly team leaders can change the teamname color."), false);
+            return 0;
+        }
+
+        String normalizedHex = LocatorBarColor.normalizeHex(rawColor);
+        String color = normalizedHex != null ? normalizedHex : (rawColor == null ? "" : rawColor.trim().toLowerCase());
+        if (normalizedHex == null) {
+            boolean knownPreset = false;
+            for (LocatorBarColor preset : LocatorBarColor.values()) {
+                if (preset.token().equals(color)) {
+                    knownPreset = true;
+                    break;
+                }
+            }
+            if (!knownPreset) {
+                source.sendSuccess(() -> Component.literal("§cInvalid color. Use any Minecraft chat color token or #RRGGBB."), false);
+                return 0;
+            }
+        }
+
+        team.setTeamNameColor(color);
+        teams.saveTeam(team);
+        source.sendSuccess(() -> TextPalette.join(
+                TextPalette.white("Teamname color set to "),
+                teams.getDisplayComponent(team),
+                TextPalette.white(".")
+        ), false);
+        return 1;
+    }
+
+    private static int setTeamNameColorAndRefresh(CommandSourceStack source, String rawColor) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        int result = setTeamNameColor(source, rawColor);
+        if (result == 1) {
+            ServerPlayer player = source.getPlayerOrException();
+            TeamData team = TeamManager.get(source.getServer()).getTeamForPlayer(player.getUUID());
+            if (team != null) {
+                openTeamColorDialog(player, team);
+            }
+        }
+        return result;
+    }
+
+    private static int setTeamNameHexColorAndRefresh(CommandSourceStack source, String rawHex) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        int result = setTeamNameColor(source, rawHex);
+        ServerPlayer player = source.getPlayerOrException();
+        TeamData team = TeamManager.get(source.getServer()).getTeamForPlayer(player.getUUID());
+        if (team != null) {
+            openTeamColorDialog(player, team);
+        }
+        return result;
+    }
+
+    private static int openTeamColorSettings(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        TeamManager teams = TeamManager.get(source.getServer());
+        TeamData team = teams.getTeamForPlayer(player.getUUID());
+        if (team == null) {
+            source.sendSuccess(() -> Component.literal("§cYou are not in a team."), false);
+            return 0;
+        }
+        if (!team.isLeader(player.getUUID())) {
+            source.sendSuccess(() -> Component.literal("§cOnly team leaders can change the teamname color."), false);
+            return 0;
+        }
+
+        openTeamColorDialog(player, team);
+        return 1;
+    }
+
+    private static void openTeamColorDialog(ServerPlayer player, TeamData team) {
+        List<Input> inputs = new ArrayList<>();
+        String current = team.getTeamNameColor();
+        inputs.add(new Input("hex", new TextInput(
+                200,
+                TextPalette.white("Custom Hex (#RRGGBB)"),
+                false,
+                current != null && current.startsWith("#") ? current : "",
+                7,
+                Optional.empty()
+        )));
+
+        List<ActionButton> actions = new ArrayList<>();
+        for (LocatorBarColor color : LocatorBarColor.values()) {
+            boolean selected = color.token().equalsIgnoreCase(current);
+            String marker = selected ? "[Selected] " : "[Select] ";
+            Component label = Component.literal(marker)
+                    .withStyle(selected ? ChatFormatting.YELLOW : ChatFormatting.WHITE)
+                    .append(Component.literal(color.displayName()).withStyle(color.formatting()));
+            actions.add(new ActionButton(
+                    new CommonButtonData(label, 170),
+                    Optional.of(new StaticAction(new ClickEvent.RunCommand("/echoteam teamnamecolor_refresh " + color.token())))
+            ));
+        }
+        actions.add(new ActionButton(
+                new CommonButtonData(TextPalette.white("Apply Custom Hex"), 170),
+                Optional.of(buildHexApplyAction("/echoteam teamnamecolor_hex_refresh $(hex)"))
+        ));
+
+        CommonDialogData common = new CommonDialogData(
+                TextPalette.white("Teamname Color"),
+                Optional.of(TextPalette.yellow("Choose a color for your teamname")),
+                true,
+                false,
+                DialogAction.CLOSE,
+                List.of(),
+                inputs
+        );
+        player.openDialog(Holder.direct(new MultiActionDialog(common, actions, Optional.empty(), 2)));
+    }
+
+    private static Action buildHexApplyAction(String commandTemplate) {
+        try {
+            Class<?> parsedTemplateClass = Class.forName("net.minecraft.server.dialog.action.ParsedTemplate");
+            Object parsed = null;
+            for (java.lang.reflect.Method method : parsedTemplateClass.getDeclaredMethods()) {
+                if (!java.lang.reflect.Modifier.isStatic(method.getModifiers())) continue;
+                if (method.getParameterCount() != 1 || method.getParameterTypes()[0] != String.class) continue;
+                method.setAccessible(true);
+
+                Object value = method.invoke(null, commandTemplate);
+                if (parsedTemplateClass.isInstance(value)) {
+                    parsed = value;
+                    break;
+                }
+                if (value != null && value.getClass().getName().equals("com.mojang.serialization.DataResult")) {
+                    java.lang.reflect.Method resultMethod = value.getClass().getMethod("result");
+                    Object result = resultMethod.invoke(value);
+                    if (result instanceof Optional<?> optional && optional.isPresent() && parsedTemplateClass.isInstance(optional.get())) {
+                        parsed = optional.get();
+                        break;
+                    }
+                }
+            }
+
+            if (parsed != null) {
+                Class<?> commandTemplateClass = Class.forName("net.minecraft.server.dialog.action.CommandTemplate");
+                for (java.lang.reflect.Constructor<?> ctor : commandTemplateClass.getConstructors()) {
+                    if (ctor.getParameterCount() == 1 && parsedTemplateClass.isAssignableFrom(ctor.getParameterTypes()[0])) {
+                        return (Action) ctor.newInstance(parsed);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // Fallback keeps the UI usable if template internals differ by version.
+        }
+        return new StaticAction(new ClickEvent.SuggestCommand("/echoteam teamnamecolor_hex_refresh "));
     }
 
     private static int settings(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -254,6 +518,17 @@ public class TeamCommand {
     private static void openTeamSettingsDialog(CommandSourceStack source, ServerPlayer viewer, TeamData team) {
         List<ActionButton> actions = new ArrayList<>();
 
+        if (team.isLeader(viewer.getUUID())) {
+            actions.add(dialogButton(
+                    "Set Teamname",
+                    new ClickEvent.SuggestCommand("/echoteam teamname " + team.getDisplayName())
+            ));
+            actions.add(dialogButton(
+                    "Set Teamname Color",
+                    new ClickEvent.RunCommand("/echoteam settings_color")
+            ));
+        }
+
         boolean leader = team.isLeader(viewer.getUUID());
         int rendered = 0;
         for (UUID memberUuid : team.getMembers()) {
@@ -269,7 +544,7 @@ public class TeamCommand {
         }
 
         CommonDialogData common = new CommonDialogData(
-                TextPalette.join(TextPalette.white("Team Settings: "), TextPalette.yellow(team.getName())),
+                TextPalette.join(TextPalette.white("Team Settings: "), TeamManager.get(source.getServer()).getDisplayComponent(team)),
                 Optional.empty(),
                 true,
                 false,
@@ -363,7 +638,7 @@ public class TeamCommand {
         ), false);
         target.sendSystemMessage(TextPalette.join(
                 TextPalette.white("Your role in team "),
-                TextPalette.yellow(team.getName()),
+                teams.getDisplayComponent(team),
                 TextPalette.white(" is now "),
                 TextPalette.yellow(role.displayName()),
                 TextPalette.white(".")
@@ -386,7 +661,11 @@ public class TeamCommand {
         }
         TeamData targetTeam = teams.getTeam(targetTeamName);
         if (targetTeam == null) {
-            source.sendSuccess(() -> Component.literal("§cTeam §e" + targetTeamName + " §cdoes not exist."), false);
+            source.sendSuccess(() -> TextPalette.join(
+                    TextPalette.red("Team "),
+                    TextPalette.yellow(targetTeamName),
+                    TextPalette.red(" does not exist.")
+            ), false);
             return 0;
         }
         if (targetTeam.getName().equalsIgnoreCase(ownTeam.getName())) {
@@ -394,12 +673,20 @@ public class TeamCommand {
             return 0;
         }
         if (teams.areAllies(ownTeam.getName(), targetTeam.getName())) {
-            source.sendSuccess(() -> Component.literal("§eYour team is already allied with §f" + targetTeam.getName() + "§e."), false);
+            source.sendSuccess(() -> TextPalette.join(
+                    TextPalette.yellow("Your team is already allied with "),
+                    teams.getDisplayComponent(targetTeam),
+                    TextPalette.yellow(".")
+            ), false);
             return 0;
         }
 
         teams.inviteAlly(ownTeam.getName(), targetTeam.getName());
-        source.sendSuccess(() -> Component.literal("§aSent ally request to §e" + targetTeam.getName() + "§a."), false);
+        source.sendSuccess(() -> TextPalette.join(
+                Component.literal("Sent ally request to ").withStyle(ChatFormatting.GREEN),
+                teams.getDisplayComponent(targetTeam),
+                Component.literal(".").withStyle(ChatFormatting.GREEN)
+        ), false);
 
         ServerPlayer targetLeader = source.getServer().getPlayerList().getPlayer(targetTeam.getLeader());
         if (targetLeader != null) {
@@ -408,8 +695,16 @@ public class TeamCommand {
                             .withColor(ChatFormatting.GREEN)
                             .withUnderlined(true)
                             .withClickEvent(new ClickEvent.RunCommand("/echoteam allies accept " + ownTeam.getName()))
-                            .withHoverEvent(new HoverEvent.ShowText(Component.literal("Accept ally invite from " + ownTeam.getName()))));
-            targetLeader.sendSystemMessage(Component.literal("§6Your team received an ally invite from §e" + ownTeam.getName() + "§6. ").append(accept));
+                            .withHoverEvent(new HoverEvent.ShowText(TextPalette.join(
+                                    TextPalette.white("Accept ally invite from "),
+                                    teams.getDisplayComponent(ownTeam)
+                            ))));
+            targetLeader.sendSystemMessage(TextPalette.join(
+                    Component.literal("Your team received an ally invite from ").withStyle(ChatFormatting.GOLD),
+                    teams.getDisplayComponent(ownTeam),
+                    Component.literal(". ").withStyle(ChatFormatting.GOLD),
+                    accept
+            ));
         }
         return 1;
     }
@@ -428,10 +723,18 @@ public class TeamCommand {
             return 0;
         }
         if (!teams.acceptAlly(ownTeam.getName(), sourceTeamName)) {
-            source.sendSuccess(() -> Component.literal("§cNo pending ally request from §e" + sourceTeamName + "§c."), false);
+            source.sendSuccess(() -> TextPalette.join(
+                    TextPalette.red("No pending ally request from "),
+                    teams.getDisplayComponent(sourceTeamName),
+                    TextPalette.red(".")
+            ), false);
             return 0;
         }
-        source.sendSuccess(() -> Component.literal("§aYour team is now allied with §e" + sourceTeamName + "§a."), false);
+        source.sendSuccess(() -> TextPalette.join(
+                Component.literal("Your team is now allied with ").withStyle(ChatFormatting.GREEN),
+                teams.getDisplayComponent(sourceTeamName),
+                Component.literal(".").withStyle(ChatFormatting.GREEN)
+        ), false);
         return 1;
     }
 
@@ -449,10 +752,18 @@ public class TeamCommand {
             return 0;
         }
         if (!teams.removeAlly(ownTeam.getName(), targetTeamName)) {
-            source.sendSuccess(() -> Component.literal("§cCould not remove ally §e" + targetTeamName + "§c."), false);
+            source.sendSuccess(() -> TextPalette.join(
+                    TextPalette.red("Could not remove ally "),
+                    teams.getDisplayComponent(targetTeamName),
+                    TextPalette.red(".")
+            ), false);
             return 0;
         }
-        source.sendSuccess(() -> Component.literal("§aRemoved ally relation with §e" + targetTeamName + "§a."), false);
+        source.sendSuccess(() -> TextPalette.join(
+                Component.literal("Removed ally relation with ").withStyle(ChatFormatting.GREEN),
+                teams.getDisplayComponent(targetTeamName),
+                Component.literal(".").withStyle(ChatFormatting.GREEN)
+        ), false);
         return 1;
     }
 
@@ -469,15 +780,26 @@ public class TeamCommand {
         if (ownTeam.getAllies().isEmpty()) {
             source.sendSuccess(() -> Component.literal("§eYour team has no allies."), false);
         } else {
-            source.sendSuccess(() -> Component.literal("§6Allies of §e" + ownTeam.getName() + "§6:"), false);
+            source.sendSuccess(() -> TextPalette.join(
+                    Component.literal("Allies of ").withStyle(ChatFormatting.GOLD),
+                    teams.getDisplayComponent(ownTeam),
+                    Component.literal(":").withStyle(ChatFormatting.GOLD)
+            ), false);
             for (String ally : ownTeam.getAllies()) {
-                source.sendSuccess(() -> Component.literal("§f- " + ally), false);
+                source.sendSuccess(() -> TextPalette.join(
+                        TextPalette.white("- "),
+                        teams.getDisplayComponent(ally)
+                ), false);
             }
         }
         if (!ownTeam.getPendingAllyInvites().isEmpty()) {
             source.sendSuccess(() -> Component.literal("§6Pending ally requests:"), false);
             for (String invite : ownTeam.getPendingAllyInvites()) {
-                source.sendSuccess(() -> Component.literal("§f- " + invite + " §7(use /echoteam allies accept " + invite + ")"), false);
+                source.sendSuccess(() -> TextPalette.join(
+                        TextPalette.white("- "),
+                        teams.getDisplayComponent(invite),
+                        Component.literal(" (use /echoteam allies accept " + invite + ")").withStyle(ChatFormatting.GRAY)
+                ), false);
             }
         }
         return 1;
@@ -522,5 +844,42 @@ public class TeamCommand {
             // Fallback to compact UUID suffix if no profile cache entry exists.
         }
         return uuid.toString().substring(0, 8) + "...";
+    }
+
+    private static void giveClaimBanners(ServerPlayer player, int amount) {
+        int remaining = amount;
+        while (remaining > 0) {
+            int stackSize = Math.min(64, remaining);
+            ItemStack stack = ModItems.createClaimBannerStack();
+            stack.setCount(stackSize);
+            boolean added = player.addItem(stack);
+            if (!added) {
+                Containers.dropItemStack(player.level(), player.getX(), player.getY(), player.getZ(), stack);
+            }
+            remaining -= stackSize;
+        }
+    }
+
+    private static void breakTeamBannersWithEffect(CommandSourceStack source, List<ClaimData> claims) {
+        for (ClaimData claim : claims) {
+            for (var level : source.getServer().getAllLevels()) {
+                if (!level.dimension().toString().equals(claim.getDimensionId())) continue;
+
+                BlockPos bannerPos = new BlockPos(claim.getBannerX(), claim.getBannerY(), claim.getBannerZ());
+                var state = level.getBlockState(bannerPos);
+                if (!state.is(Blocks.WHITE_BANNER) && !state.is(Blocks.WHITE_WALL_BANNER)) {
+                    continue;
+                }
+
+                level.sendParticles(ParticleTypes.EXPLOSION, bannerPos.getX() + 0.5, bannerPos.getY() + 0.6, bannerPos.getZ() + 0.5,
+                        8, 0.2, 0.2, 0.2, 0.01);
+                level.sendParticles(ParticleTypes.POOF, bannerPos.getX() + 0.5, bannerPos.getY() + 0.6, bannerPos.getZ() + 0.5,
+                        16, 0.3, 0.3, 0.3, 0.02);
+                level.playSound(null, bannerPos, SoundEvents.GENERIC_EXPLODE.value(), SoundSource.BLOCKS, 0.45f, 1.3f);
+                // Remove only the claim banner block without drops or collateral damage.
+                level.setBlock(bannerPos, Blocks.AIR.defaultBlockState(), 3);
+                break;
+            }
+        }
     }
 }
