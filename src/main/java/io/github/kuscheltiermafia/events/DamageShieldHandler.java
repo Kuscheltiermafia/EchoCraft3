@@ -2,10 +2,10 @@ package io.github.kuscheltiermafia.events;
 
 import io.github.kuscheltiermafia.registry.ModItems;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.ItemStack;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.text.Text;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.network.chat.Component;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -22,31 +22,32 @@ public class DamageShieldHandler {
 
     public static void register() {
         ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
-            if (!(entity instanceof ServerPlayerEntity player)) return true;
-            UUID id = player.getUuid();
+            if (!(entity instanceof ServerPlayer player)) return true;
+            UUID id = player.getUUID();
             if (processing.contains(id)) return true; // prevent recursion
 
             ItemStack shield = findDamageShield(player);
             if (shield == null) return true; // no shield, allow normal damage
 
-            int durability = shield.getMaxDamage() - shield.getDamage();
+            int maxDurability = shield.getMaxDamage();
+            int currentDamage = shield.getDamageValue();
+            int durability = maxDurability - currentDamage;
             if (durability <= 0) return true; // broken shield
 
             int absorbed = (int) Math.min(amount, durability);
             float remaining = amount - absorbed;
 
             // Reduce shield durability manually
-            int newDamage = shield.getDamage() + absorbed;
-            if (newDamage >= shield.getMaxDamage()) {
+            int newDamage = currentDamage + absorbed;
+            if (newDamage >= maxDurability) {
                 shield.setCount(0); // item breaks
-                player.sendMessage(Text.literal("§6Your Damage Shield has broken!"), true);
+                player.sendSystemMessage(Component.literal("§6Your Damage Shield has broken!"));
             } else {
-                shield.setDamage(newDamage);
+                shield.setDamageValue(newDamage);
             }
 
-            player.sendMessage(
-                    Text.literal("§6Damage Shield absorbed §c" + absorbed + " §6damage!"),
-                    true
+            player.sendSystemMessage(
+                    Component.literal("§6Damage Shield absorbed §c" + absorbed + " §6damage!")
             );
 
             if (remaining <= 0) {
@@ -56,7 +57,7 @@ public class DamageShieldHandler {
             // Apply the residual damage without triggering this handler again
             processing.add(id);
             try {
-                player.damage(player.getServerWorld(), source, remaining);
+                player.hurt(player.damageSources().magic(), remaining);
             } finally {
                 processing.remove(id);
             }
@@ -64,10 +65,10 @@ public class DamageShieldHandler {
         });
     }
 
-    private static ItemStack findDamageShield(PlayerEntity player) {
-        for (int i = 0; i < player.getInventory().size(); i++) {
-            ItemStack stack = player.getInventory().getStack(i);
-            if (stack.isOf(ModItems.DAMAGE_SHIELD) && stack.getDamage() < stack.getMaxDamage()) {
+    private static ItemStack findDamageShield(Player player) {
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+            ItemStack stack = player.getInventory().getItem(i);
+            if (stack.is(ModItems.DAMAGE_SHIELD) && stack.getDamageValue() < stack.getMaxDamage()) {
                 return stack;
             }
         }

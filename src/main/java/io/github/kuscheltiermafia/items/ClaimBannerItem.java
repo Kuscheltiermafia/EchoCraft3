@@ -1,6 +1,6 @@
 package io.github.kuscheltiermafia.items;
 
-import net.minecraft.item.Item;
+import net.minecraft.world.item.Item;
 
 /**
  * The Claim Banner item. Players right-click any block while holding this to
@@ -9,7 +9,7 @@ import net.minecraft.item.Item;
  */
 public class ClaimBannerItem extends Item {
 
-    public ClaimBannerItem(Settings settings) {
-        super(settings);
+    public ClaimBannerItem(Item.Properties properties) {
+        super(properties);
     }
 }

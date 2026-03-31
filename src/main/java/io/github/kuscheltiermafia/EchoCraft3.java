@@ -18,8 +18,8 @@ public class EchoCraft3 implements ModInitializer {
 	public void onInitialize() {
 		LOGGER.info("Initialising EchoCraft3");
 
-		// Register items
-		ModItems.register();
+		// Register items via ModItems
+		ModItems.registerItems();
 
 		// Register event handlers
 		DamageShieldHandler.register();

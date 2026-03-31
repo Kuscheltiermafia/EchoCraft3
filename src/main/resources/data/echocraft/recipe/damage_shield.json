@@ -1,13 +1,14 @@
 {
   "type": "minecraft:crafting_shaped",
   "pattern": [
-    "III",
-    "IDI",
-    "III"
+    "IWI",
+    "WSW",
+    "IWI"
   ],
   "key": {
     "I": {"item": "minecraft:iron_ingot"},
-    "D": {"item": "minecraft:diamond"}
+    "W": {"item": "minecraft:leather"},
+    "S": {"item": "minecraft:shield"}
   },
   "result": {
     "id": "echocraft:damage_shield",
