@@ -58,39 +58,48 @@ public class DamageShieldHandler {
             UUID id = player.getUUID();
             if (processing.contains(id)) return true; // prevent recursion
 
-            ItemStack shield = findDamageShield(player);
-            if (shield == null) return true; // no shield, allow normal damage
-            enforceNoRepair(shield);
+            float remaining = amount;
+            while (remaining > 0.0001f) {
+                ItemStack shield = findDamageShield(player);
+                if (shield == null) {
+                    break;
+                }
+                enforceNoRepair(shield);
 
-            int maxDurability = getShieldMaxDurability(shield);
-            int currentDamage = getShieldDamage(shield);
-            int durability = maxDurability - currentDamage;
-            if (durability <= 0) return true; // broken shield
+                int maxDurability = getShieldMaxDurability(shield);
+                int currentDamage = getShieldDamage(shield);
+                int durability = maxDurability - currentDamage;
+                if (durability <= 0) {
+                    continue;
+                }
 
-            float absorbed = Math.min(amount, (float) durability);
-            if (absorbed <= 0.0f) return true;
-            float remaining = amount - absorbed;
+                float absorbed = Math.min(remaining, (float) durability);
+                if (absorbed <= 0.0f) {
+                    break;
+                }
 
-            // Consume durability per damage point; ceil avoids low-damage click-through.
-            int attemptedDurabilityLoss = Math.max(1, (int) Math.ceil(absorbed));
-            int durabilityLoss = Math.min(durability, calculateDurabilityLoss(player, shield, attemptedDurabilityLoss));
+                int attemptedDurabilityLoss = Math.max(1, (int) Math.ceil(absorbed));
+                int durabilityLoss = Math.min(durability, calculateDurabilityLoss(player, shield, attemptedDurabilityLoss));
 
-            MendingData mendingData = findMending(shield);
-            if (mendingData != null && durabilityLoss > 0) {
-                dropMendingBook(player, mendingData);
-                stripMendingFromDamageShield(shield);
-            }
+                MendingData mendingData = findMending(shield);
+                if (mendingData != null && durabilityLoss > 0) {
+                    dropMendingBook(player, mendingData);
+                    stripMendingFromDamageShield(shield);
+                }
 
-            int newDamage = currentDamage + durabilityLoss;
-            if (newDamage >= maxDurability) {
-                breakShield(player, shield);
-            } else {
-                setShieldDamage(shield, newDamage);
-                setRepairLock(shield, newDamage);
+                int newDamage = currentDamage + durabilityLoss;
+                if (newDamage >= maxDurability) {
+                    breakShield(player, shield);
+                } else {
+                    setShieldDamage(shield, newDamage);
+                    setRepairLock(shield, newDamage);
+                }
+
+                remaining -= absorbed;
             }
 
             if (remaining <= 0.0001f) {
-                return false; // fully absorbed
+                return false; // fully absorbed, potentially by multiple shields
             }
 
             // Apply the residual damage without triggering this handler again

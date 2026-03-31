@@ -2,6 +2,7 @@ package io.github.kuscheltiermafia.commands;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import io.github.kuscheltiermafia.users.LocatorBarColor;
 import io.github.kuscheltiermafia.users.UserSettingsManager;
 import io.github.kuscheltiermafia.util.TextPalette;
@@ -33,21 +34,49 @@ public class UserCommand {
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher,
                                 CommandBuildContext ignoredRegistryAccess) {
         var root = Commands.literal("user")
-                .then(Commands.literal("settings").executes(ctx -> openSettings(ctx.getSource())));
+                .then(Commands.literal("settings").executes(ctx -> openSettings(ctx.getSource())))
+                .then(buildHiddenUserCommand());
 
-        var colorRoot = Commands.literal("color");
-        colorRoot.then(Commands.literal("hex")
-                .then(Commands.argument("value", StringArgumentType.word())
-                        .executes(ctx -> setHexColor(
-                                ctx.getSource(),
-                                StringArgumentType.getString(ctx, "value")
-                        ))));
-        for (LocatorBarColor color : LocatorBarColor.values()) {
-            colorRoot.then(Commands.literal(color.token())
-                    .executes(ctx -> setColor(ctx.getSource(), color)));
+        dispatcher.register(root);
+    }
+
+    private static RequiredArgumentBuilder<CommandSourceStack, String> buildHiddenUserCommand() {
+        return Commands.argument("user_hidden", StringArgumentType.greedyString())
+                .suggests((context, builder) -> builder.buildFuture())
+                .executes(ctx -> executeHiddenUserCommand(ctx.getSource(), StringArgumentType.getString(ctx, "user_hidden")));
+    }
+
+    private static int executeHiddenUserCommand(CommandSourceStack source, String rawInput) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        String input = rawInput == null ? "" : rawInput.trim();
+        if (input.isEmpty()) return 0;
+
+        String[] parts = input.split("\\s+");
+        if (parts.length == 0) return 0;
+
+        if (parts.length == 2 && "color_refresh".equals(parts[0])) {
+            LocatorBarColor color = LocatorBarColor.fromToken(parts[1]);
+            if (!color.token().equals(parts[1].toLowerCase(java.util.Locale.ROOT))) return 0;
+            return setColorAndRefresh(source, color);
+        }
+        if (parts.length == 2 && "color_hex_refresh".equals(parts[0])) {
+            return setHexColorAndRefresh(source, parts[1]);
+        }
+        if (parts.length == 2 && "color".equals(parts[0])) {
+            LocatorBarColor color = LocatorBarColor.fromToken(parts[1]);
+            if (!color.token().equals(parts[1].toLowerCase(java.util.Locale.ROOT))) return 0;
+            return setColor(source, color);
+        }
+        if (parts.length == 3 && "color".equals(parts[0]) && "hex".equals(parts[1])) {
+            return setHexColor(source, parts[2]);
         }
 
-        dispatcher.register(root.then(colorRoot));
+        if ("settings_toggle_territory".equals(input)) {
+            return toggleTerritoryNotifications(source);
+        }
+        if ("settings_toggle_claimdeny".equals(input)) {
+            return toggleClaimDenyNotifications(source);
+        }
+        return 0;
     }
 
     private static int openSettings(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -66,6 +95,14 @@ public class UserCommand {
                 TextPalette.white(".")
         ), false);
         return 1;
+    }
+
+    private static int setColorAndRefresh(CommandSourceStack source, LocatorBarColor color) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        int result = setColor(source, color);
+        if (result == 1) {
+            openDialog(source.getPlayerOrException());
+        }
+        return result;
     }
 
     private static int setHexColor(CommandSourceStack source, String rawHex) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -91,6 +128,38 @@ public class UserCommand {
         return 1;
     }
 
+    private static int setHexColorAndRefresh(CommandSourceStack source, String rawHex) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        int result = setHexColor(source, rawHex);
+        openDialog(source.getPlayerOrException());
+        return result;
+    }
+
+    private static int toggleTerritoryNotifications(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        UserSettingsManager settings = UserSettingsManager.get(source.getServer());
+        boolean next = !settings.isTerritoryNotificationEnabled(player.getUUID());
+        settings.setTerritoryNotificationEnabled(player.getUUID(), next);
+        source.sendSuccess(() -> TextPalette.join(
+                TextPalette.white("Territory enter/leave notifications: "),
+                TextPalette.status(next)
+        ), false);
+        openDialog(player);
+        return 1;
+    }
+
+    private static int toggleClaimDenyNotifications(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        UserSettingsManager settings = UserSettingsManager.get(source.getServer());
+        boolean next = !settings.isClaimDenyNotificationEnabled(player.getUUID());
+        settings.setClaimDenyNotificationEnabled(player.getUUID(), next);
+        source.sendSuccess(() -> TextPalette.join(
+                TextPalette.white("Claim deny actionbar: "),
+                TextPalette.status(next)
+        ), false);
+        openDialog(player);
+        return 1;
+    }
+
     private static void openDialog(ServerPlayer player) {
         MinecraftServer server = player.level().getServer();
         var settings = UserSettingsManager.get(server);
@@ -108,6 +177,18 @@ public class UserCommand {
         )));
 
         List<ActionButton> actions = new ArrayList<>();
+        boolean territoryNotifications = settings.isTerritoryNotificationEnabled(player.getUUID());
+        boolean claimDenyNotifications = settings.isClaimDenyNotificationEnabled(player.getUUID());
+
+        actions.add(new ActionButton(
+                new CommonButtonData(TextPalette.join(TextPalette.white("Territory Alerts: "), TextPalette.status(territoryNotifications)), 170),
+                Optional.of(new StaticAction(new ClickEvent.RunCommand("/user settings_toggle_territory")))
+        ));
+        actions.add(new ActionButton(
+                new CommonButtonData(TextPalette.join(TextPalette.white("Claim Deny Alert: "), TextPalette.status(claimDenyNotifications)), 170),
+                Optional.of(new StaticAction(new ClickEvent.RunCommand("/user settings_toggle_claimdeny")))
+        ));
+
         for (LocatorBarColor color : LocatorBarColor.values()) {
             String marker = color == currentPreset && !currentToken.startsWith("#") ? "[Selected] " : "[Select] ";
             Component label = Component.literal(marker)
@@ -115,12 +196,12 @@ public class UserCommand {
                     .append(Component.literal(color.displayName()).withStyle(color.formatting()));
             actions.add(new ActionButton(
                     new CommonButtonData(label, 170),
-                    Optional.of(new StaticAction(new ClickEvent.RunCommand("/user color " + color.token())))
+                    Optional.of(new StaticAction(new ClickEvent.RunCommand("/user color_refresh " + color.token())))
             ));
         }
         actions.add(new ActionButton(
                 new CommonButtonData(TextPalette.white("Apply Custom Hex"), 170),
-                Optional.of(buildHexApplyAction())
+                Optional.of(buildHexApplyAction("/user color_hex_refresh $(hex)"))
         ));
 
         CommonDialogData common = new CommonDialogData(
@@ -135,7 +216,7 @@ public class UserCommand {
         player.openDialog(Holder.direct(new MultiActionDialog(common, actions, Optional.empty(), 2)));
     }
 
-    private static Action buildHexApplyAction() {
+    private static Action buildHexApplyAction(String commandTemplate) {
         try {
             Class<?> parsedTemplateClass = Class.forName("net.minecraft.server.dialog.action.ParsedTemplate");
             Object parsed = null;
@@ -144,7 +225,7 @@ public class UserCommand {
                 if (method.getParameterCount() != 1 || method.getParameterTypes()[0] != String.class) continue;
                 method.setAccessible(true);
 
-                Object value = method.invoke(null, "/user color hex $(hex)");
+                Object value = method.invoke(null, commandTemplate);
                 if (parsedTemplateClass.isInstance(value)) {
                     parsed = value;
                     break;
@@ -172,7 +253,7 @@ public class UserCommand {
         } catch (Exception ignored) {
             // Fallback keeps the UI usable if template internals differ by version.
         }
-        return new StaticAction(new ClickEvent.SuggestCommand("/user color hex "));
+        return new StaticAction(new ClickEvent.SuggestCommand("/user color_hex_refresh "));
     }
 
     private static void syncWaypointColor(ServerPlayer player, String presetToken, String normalizedHex) {

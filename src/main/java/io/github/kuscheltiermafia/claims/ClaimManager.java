@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
 import java.util.List;
@@ -195,6 +196,51 @@ public class ClaimManager extends SavedData {
         return changed;
     }
 
+    public int removeClaimsByTeam(String teamName) {
+        if (teamName == null || teamName.isBlank()) return 0;
+
+        int removed = 0;
+        Iterator<Map.Entry<String, ClaimData>> iterator = claims.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<String, ClaimData> entry = iterator.next();
+            ClaimData claim = entry.getValue();
+            if (claim.getTeamName() == null) continue;
+            if (!teamName.equalsIgnoreCase(claim.getTeamName())) continue;
+            iterator.remove();
+            removed++;
+        }
+
+        if (removed > 0) {
+            markDirtyAndPersist();
+        }
+        return removed;
+    }
+
+
+    /**
+     * Copies all claim-rule flags from an existing claim of the same team into the target claim.
+     *
+     * @return true if settings were copied, false if no matching source claim exists.
+     */
+    public boolean cloneSettingsFromExistingTeamClaim(String teamName, String dimensionId, int chunkX, int chunkZ) {
+        if (teamName == null || teamName.isBlank()) return false;
+
+        ClaimData target = claims.get(makeKey(dimensionId, chunkX, chunkZ));
+        if (target == null) return false;
+
+        for (Map.Entry<String, ClaimData> entry : claims.entrySet()) {
+            ClaimData source = entry.getValue();
+            if (source == target) continue;
+            if (source.getTeamName() == null) continue;
+            if (!teamName.equalsIgnoreCase(source.getTeamName())) continue;
+
+            copyRuleFlags(source, target);
+            markDirtyAndPersist();
+            return true;
+        }
+        return false;
+    }
+
     private static boolean applySetting(ClaimData data, String key, boolean enabled) {
         switch (key) {
             case "explosions" -> data.setExplosionsAllowed(enabled);
@@ -212,6 +258,19 @@ public class ClaimManager extends SavedData {
             }
         }
         return true;
+    }
+
+    private static void copyRuleFlags(ClaimData source, ClaimData target) {
+        target.setExplosionsAllowed(source.isExplosionsAllowed());
+        target.setPvpAllowed(source.isPvpAllowed());
+        target.setForeignBreakAllowed(source.isForeignBreakAllowed());
+        target.setForeignPlaceAllowed(source.isForeignPlaceAllowed());
+        target.setForeignInteractAllowed(source.isForeignInteractAllowed());
+        target.setForeignEntityAllowed(source.isForeignEntityAllowed());
+        target.setAllyBreakAllowed(source.isAllyBreakAllowed());
+        target.setAllyPlaceAllowed(source.isAllyPlaceAllowed());
+        target.setAllyInteractAllowed(source.isAllyInteractAllowed());
+        target.setAllyEntityAllowed(source.isAllyEntityAllowed());
     }
 
     // -------------------------------------------------------------------------
