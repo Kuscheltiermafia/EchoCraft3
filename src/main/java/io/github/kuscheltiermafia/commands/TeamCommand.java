@@ -29,6 +29,8 @@ import net.minecraft.server.dialog.DialogAction;
 import net.minecraft.server.dialog.Input;
 import net.minecraft.server.dialog.MultiActionDialog;
 import net.minecraft.server.dialog.action.Action;
+import net.minecraft.server.dialog.action.CommandTemplate;
+import net.minecraft.server.dialog.action.ParsedTemplate;
 import net.minecraft.server.dialog.action.StaticAction;
 import net.minecraft.server.dialog.input.TextInput;
 import io.github.kuscheltiermafia.teams.TeamData;
@@ -102,7 +104,18 @@ public class TeamCommand {
         String input = rawInput == null ? "" : rawInput.trim();
         if (input.isEmpty()) return 0;
 
-        String[] parts = input.split("\\s+");
+        String[] parts = input.split("\\s+", 2);
+        if (parts.length == 0) return 0;
+
+        // New direct commands for hex color and teamname
+        if (parts.length == 2 && "sethexcolor".equals(parts[0])) {
+            return setTeamNameHexColorAndRefresh(source, parts[1]);
+        }
+        if (parts.length == 2 && "setteamname".equals(parts[0])) {
+            return setTeamName(source, parts[1]);
+        }
+
+        parts = input.split("\\s+");
         if (parts.length == 1 && "settings_color".equals(parts[0])) {
             return openTeamColorSettings(source);
         }
@@ -110,16 +123,16 @@ public class TeamCommand {
             return setRole(source, parts[1], parts[2]);
         }
         if (parts.length == 2 && "teamnamecolor".equals(parts[0])) {
-            return setTeamNameColor(source, parts[1]);
+            return setTeamNameColor(source, normalizeDialogValue(parts[1]));
         }
         if (parts.length == 2 && "teamnamecolor_refresh".equals(parts[0])) {
-            return setTeamNameColorAndRefresh(source, parts[1]);
+            return setTeamNameColorAndRefresh(source, normalizeDialogValue(parts[1]));
         }
         if (parts.length == 2 && "teamnamecolor_hex_refresh".equals(parts[0])) {
-            return setTeamNameHexColorAndRefresh(source, parts[1]);
+            return setTeamNameHexColorAndRefresh(source, normalizeDialogValue(parts[1]));
         }
         if (input.startsWith("teamname ") && input.length() > "teamname ".length()) {
-            return setTeamName(source, input.substring("teamname ".length()));
+            return setTeamName(source, normalizeDialogValue(input.substring("teamname ".length())));
         }
         return 0;
     }
@@ -325,7 +338,12 @@ public class TeamCommand {
             return 0;
         }
 
-        String value = rawTeamName == null ? "" : rawTeamName.trim();
+        String value = normalizeDialogValue(rawTeamName);
+        if ((value.startsWith("$(") && value.endsWith(")")) ||
+                (value.startsWith("{") && value.endsWith("}"))) {
+            source.sendSuccess(() -> TextPalette.white("Could not read the textbox value. Please re-open /echoteam settings and try again."), false);
+            return 0;
+        }
         if (value.isEmpty()) {
             source.sendSuccess(() -> Component.literal("§cTeamname cannot be empty."), false);
             return 0;
@@ -397,7 +415,36 @@ public class TeamCommand {
     }
 
     private static int setTeamNameHexColorAndRefresh(CommandSourceStack source, String rawHex) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-        int result = setTeamNameColor(source, rawHex);
+        String candidate = normalizeDialogValue(rawHex);
+        if ((candidate.startsWith("$(") && candidate.endsWith(")")) ||
+                (candidate.startsWith("{") && candidate.endsWith("}"))) {
+            source.sendSuccess(() -> TextPalette.white("Could not read the textbox value. Please re-open /echoteam settings_color and try again."), false);
+            ServerPlayer player = source.getPlayerOrException();
+            TeamData team = TeamManager.get(source.getServer()).getTeamForPlayer(player.getUUID());
+            if (team != null) {
+                openTeamColorDialog(player, team);
+            }
+            return 0;
+        }
+
+        String normalizedHex = LocatorBarColor.normalizeHex(candidate);
+        if (normalizedHex == null) {
+            source.sendSuccess(() -> TextPalette.join(
+                    TextPalette.white("Invalid hex color. Use "),
+                    TextPalette.yellow("#RRGGBB"),
+                    TextPalette.white(" or "),
+                    TextPalette.yellow("RRGGBB"),
+                    TextPalette.white(".")
+            ), false);
+            ServerPlayer player = source.getPlayerOrException();
+            TeamData team = TeamManager.get(source.getServer()).getTeamForPlayer(player.getUUID());
+            if (team != null) {
+                openTeamColorDialog(player, team);
+            }
+            return 0;
+        }
+
+        int result = setTeamNameColor(source, normalizedHex);
         ServerPlayer player = source.getPlayerOrException();
         TeamData team = TeamManager.get(source.getServer()).getTeamForPlayer(player.getUUID());
         if (team != null) {
@@ -426,6 +473,7 @@ public class TeamCommand {
     private static void openTeamColorDialog(ServerPlayer player, TeamData team) {
         List<Input> inputs = new ArrayList<>();
         String current = team.getTeamNameColor();
+        /*
         inputs.add(new Input("hex", new TextInput(
                 200,
                 TextPalette.white("Custom Hex (#RRGGBB)"),
@@ -434,6 +482,7 @@ public class TeamCommand {
                 7,
                 Optional.empty()
         )));
+         */
 
         List<ActionButton> actions = new ArrayList<>();
         for (LocatorBarColor color : LocatorBarColor.values()) {
@@ -447,10 +496,13 @@ public class TeamCommand {
                     Optional.of(new StaticAction(new ClickEvent.RunCommand("/echoteam teamnamecolor_refresh " + color.token())))
             ));
         }
+
+        /*
         actions.add(new ActionButton(
                 new CommonButtonData(TextPalette.white("Apply Custom Hex"), 170),
-                Optional.of(buildHexApplyAction("/echoteam teamnamecolor_hex_refresh $(hex)"))
+                Optional.of(new StaticAction(new ClickEvent.SuggestCommand("/echoteam sethexcolor ")))
         ));
+         */
 
         CommonDialogData common = new CommonDialogData(
                 TextPalette.white("Teamname Color"),
@@ -462,44 +514,6 @@ public class TeamCommand {
                 inputs
         );
         player.openDialog(Holder.direct(new MultiActionDialog(common, actions, Optional.empty(), 2)));
-    }
-
-    private static Action buildHexApplyAction(String commandTemplate) {
-        try {
-            Class<?> parsedTemplateClass = Class.forName("net.minecraft.server.dialog.action.ParsedTemplate");
-            Object parsed = null;
-            for (java.lang.reflect.Method method : parsedTemplateClass.getDeclaredMethods()) {
-                if (!java.lang.reflect.Modifier.isStatic(method.getModifiers())) continue;
-                if (method.getParameterCount() != 1 || method.getParameterTypes()[0] != String.class) continue;
-                method.setAccessible(true);
-
-                Object value = method.invoke(null, commandTemplate);
-                if (parsedTemplateClass.isInstance(value)) {
-                    parsed = value;
-                    break;
-                }
-                if (value != null && value.getClass().getName().equals("com.mojang.serialization.DataResult")) {
-                    java.lang.reflect.Method resultMethod = value.getClass().getMethod("result");
-                    Object result = resultMethod.invoke(value);
-                    if (result instanceof Optional<?> optional && optional.isPresent() && parsedTemplateClass.isInstance(optional.get())) {
-                        parsed = optional.get();
-                        break;
-                    }
-                }
-            }
-
-            if (parsed != null) {
-                Class<?> commandTemplateClass = Class.forName("net.minecraft.server.dialog.action.CommandTemplate");
-                for (java.lang.reflect.Constructor<?> ctor : commandTemplateClass.getConstructors()) {
-                    if (ctor.getParameterCount() == 1 && parsedTemplateClass.isAssignableFrom(ctor.getParameterTypes()[0])) {
-                        return (Action) ctor.newInstance(parsed);
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-            // Fallback keeps the UI usable if template internals differ by version.
-        }
-        return new StaticAction(new ClickEvent.SuggestCommand("/echoteam teamnamecolor_hex_refresh "));
     }
 
     private static int settings(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -518,11 +532,20 @@ public class TeamCommand {
     private static void openTeamSettingsDialog(CommandSourceStack source, ServerPlayer viewer, TeamData team) {
         List<ActionButton> actions = new ArrayList<>();
 
+        // Instead of a "Set Teamname" button we provide an inline text input that mirrors
+        // the current teamname. When the dialog closes the input will be used to set the
+        // teamname (via the /echoteam teamname $(teamname) command) if it is not empty.
         if (team.isLeader(viewer.getUUID())) {
-            actions.add(dialogButton(
-                    "Set Teamname",
-                    new ClickEvent.SuggestCommand("/echoteam teamname " + team.getDisplayName())
+            // Keep teamname color button
+            // Add an explicit Save button so leaders can apply the teamname immediately
+            /*
+            actions.add(new ActionButton(
+                    new CommonButtonData(Component.literal("Change Teamname"), 150),
+                    Optional.of(new StaticAction(new ClickEvent.SuggestCommand("/echoteam setteamname ")))
             ));
+             */
+            
+
             actions.add(dialogButton(
                     "Set Teamname Color",
                     new ClickEvent.RunCommand("/echoteam settings_color")
@@ -543,6 +566,23 @@ public class TeamCommand {
             rendered++;
         }
 
+        // Prepare an input field for the teamname. This mirrors the current team display name
+        // when the dialog opens. On dialog close we run the command to set the teamname
+        // using the input value (template $(teamname)). The helper buildHexApplyAction can
+        // construct an Action from the command template string.
+        List<Input> inputs = new ArrayList<>();
+        /*
+        String currentName = team.getDisplayName() == null ? "" : team.getDisplayName();
+        inputs.add(new Input("teamname", new TextInput(
+                150,
+                TextPalette.white("Teamname"),
+                false,
+                currentName,
+                32,
+                Optional.empty()
+        )));
+         */
+
         CommonDialogData common = new CommonDialogData(
                 TextPalette.join(TextPalette.white("Team Settings: "), TeamManager.get(source.getServer()).getDisplayComponent(team)),
                 Optional.empty(),
@@ -550,11 +590,12 @@ public class TeamCommand {
                 false,
                 DialogAction.CLOSE,
                 List.of(),
-                List.of()
+                inputs
         );
         MultiActionDialog dialog = new MultiActionDialog(common, actions, Optional.empty(), 2);
         viewer.openDialog(Holder.direct(dialog));
     }
+
 
     private static int settingsMember(CommandSourceStack source, String memberName) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayer actor = source.getPlayerOrException();
@@ -600,8 +641,6 @@ public class TeamCommand {
     private static ActionButton dialogButton(String label, ClickEvent clickEvent) {
         return new ActionButton(new CommonButtonData(Component.literal(label), 150), Optional.of(new StaticAction(clickEvent)));
     }
-
-
 
     private static int setRole(CommandSourceStack source, String playerName, String rawRole) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayer actor = source.getPlayerOrException();
@@ -957,5 +996,16 @@ public class TeamCommand {
         } catch (ReflectiveOperationException ignored) {
             return null;
         }
+    }
+
+    private static String normalizeDialogValue(String raw) {
+        String value = raw == null ? "" : raw.trim();
+        while (value.length() >= 2) {
+            boolean doubleQuoted = value.startsWith("\"") && value.endsWith("\"");
+            boolean singleQuoted = value.startsWith("'") && value.endsWith("'");
+            if (!doubleQuoted && !singleQuoted) break;
+            value = value.substring(1, value.length() - 1).trim();
+        }
+        return value.replace("\\\"", "\"").replace("\\\\", "\\");
     }
 }

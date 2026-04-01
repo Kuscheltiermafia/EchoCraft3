@@ -19,6 +19,8 @@ import net.minecraft.server.dialog.DialogAction;
 import net.minecraft.server.dialog.Input;
 import net.minecraft.server.dialog.MultiActionDialog;
 import net.minecraft.server.dialog.action.Action;
+import net.minecraft.server.dialog.action.CommandTemplate;
+import net.minecraft.server.dialog.action.ParsedTemplate;
 import net.minecraft.server.dialog.action.StaticAction;
 import net.minecraft.server.dialog.input.TextInput;
 import net.minecraft.server.MinecraftServer;
@@ -50,7 +52,15 @@ public class UserCommand {
         String input = rawInput == null ? "" : rawInput.trim();
         if (input.isEmpty()) return 0;
 
-        String[] parts = input.split("\\s+");
+        String[] parts = input.split("\\s+", 2);
+        if (parts.length == 0) return 0;
+
+        // New direct hex color setter
+        if (parts.length == 2 && "sethexcolor".equals(parts[0])) {
+            return setHexColor(source, parts[1]);
+        }
+
+        parts = input.split("\\s+");
         if (parts.length == 0) return 0;
 
         if (parts.length == 2 && "color_refresh".equals(parts[0])) {
@@ -107,8 +117,14 @@ public class UserCommand {
 
     private static int setHexColor(CommandSourceStack source, String rawHex) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayer player = source.getPlayerOrException();
+        String candidate = normalizeDialogValue(rawHex);
+        if ((candidate.startsWith("$(") && candidate.endsWith(")")) ||
+                (candidate.startsWith("{") && candidate.endsWith("}"))) {
+            source.sendSuccess(() -> TextPalette.white("Could not read the textbox value. Please re-open /user settings and try again."), false);
+            return 0;
+        }
         UserSettingsManager settings = UserSettingsManager.get(source.getServer());
-        if (!settings.setLocatorHexColor(player.getUUID(), rawHex)) {
+        if (!settings.setLocatorHexColor(player.getUUID(), candidate)) {
             source.sendSuccess(() -> TextPalette.join(
                     TextPalette.white("Invalid hex color. Use "),
                     TextPalette.yellow("#RRGGBB"),
@@ -167,6 +183,7 @@ public class UserCommand {
         var currentPreset = settings.getLocatorColorPreset(player.getUUID());
 
         List<Input> inputs = new ArrayList<>();
+        /*
         inputs.add(new Input("hex", new TextInput(
                 200,
                 TextPalette.white("Custom Hex (#RRGGBB)"),
@@ -175,6 +192,7 @@ public class UserCommand {
                 7,
                 Optional.empty()
         )));
+         */
 
         List<ActionButton> actions = new ArrayList<>();
         boolean territoryNotifications = settings.isTerritoryNotificationEnabled(player.getUUID());
@@ -199,10 +217,13 @@ public class UserCommand {
                     Optional.of(new StaticAction(new ClickEvent.RunCommand("/user color_refresh " + color.token())))
             ));
         }
+
+        /*
         actions.add(new ActionButton(
                 new CommonButtonData(TextPalette.white("Apply Custom Hex"), 170),
-                Optional.of(buildHexApplyAction("/user color_hex_refresh $(hex)"))
+                Optional.of(new StaticAction(new ClickEvent.SuggestCommand("/user sethexcolor ")))
         ));
+         */
 
         CommonDialogData common = new CommonDialogData(
                 TextPalette.white("User Settings"),
@@ -216,45 +237,6 @@ public class UserCommand {
         player.openDialog(Holder.direct(new MultiActionDialog(common, actions, Optional.empty(), 2)));
     }
 
-    private static Action buildHexApplyAction(String commandTemplate) {
-        try {
-            Class<?> parsedTemplateClass = Class.forName("net.minecraft.server.dialog.action.ParsedTemplate");
-            Object parsed = null;
-            for (java.lang.reflect.Method method : parsedTemplateClass.getDeclaredMethods()) {
-                if (!java.lang.reflect.Modifier.isStatic(method.getModifiers())) continue;
-                if (method.getParameterCount() != 1 || method.getParameterTypes()[0] != String.class) continue;
-                method.setAccessible(true);
-
-                Object value = method.invoke(null, commandTemplate);
-                if (parsedTemplateClass.isInstance(value)) {
-                    parsed = value;
-                    break;
-                }
-
-                // Mojang uses DataResult for template parsing; unwrap result() if needed.
-                if (value != null && value.getClass().getName().equals("com.mojang.serialization.DataResult")) {
-                    java.lang.reflect.Method resultMethod = value.getClass().getMethod("result");
-                    Object result = resultMethod.invoke(value);
-                    if (result instanceof Optional<?> optional && optional.isPresent() && parsedTemplateClass.isInstance(optional.get())) {
-                        parsed = optional.get();
-                        break;
-                    }
-                }
-            }
-
-            if (parsed != null) {
-                Class<?> commandTemplateClass = Class.forName("net.minecraft.server.dialog.action.CommandTemplate");
-                for (java.lang.reflect.Constructor<?> ctor : commandTemplateClass.getConstructors()) {
-                    if (ctor.getParameterCount() == 1 && parsedTemplateClass.isAssignableFrom(ctor.getParameterTypes()[0])) {
-                        return (Action) ctor.newInstance(parsed);
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-            // Fallback keeps the UI usable if template internals differ by version.
-        }
-        return new StaticAction(new ClickEvent.SuggestCommand("/user color_hex_refresh "));
-    }
 
     private static void syncWaypointColor(ServerPlayer player, String presetToken, String normalizedHex) {
         MinecraftServer server = player.level().getServer();
@@ -281,6 +263,18 @@ public class UserCommand {
                 // Try next syntax variant for this game version/mapping.
             }
         }
+    }
+
+    private static String normalizeDialogValue(String raw) {
+        String value = raw == null ? "" : raw.trim();
+        // Some dialog substitutions may provide quoted values.
+        while (value.length() >= 2) {
+            boolean doubleQuoted = value.startsWith("\"") && value.endsWith("\"");
+            boolean singleQuoted = value.startsWith("'") && value.endsWith("'");
+            if (!doubleQuoted && !singleQuoted) break;
+            value = value.substring(1, value.length() - 1).trim();
+        }
+        return value.replace("\\\"", "\"").replace("\\\\", "\\");
     }
 }
 
