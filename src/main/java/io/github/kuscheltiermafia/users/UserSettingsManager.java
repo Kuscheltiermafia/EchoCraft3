@@ -2,6 +2,7 @@ package io.github.kuscheltiermafia.users;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.minecraft.server.MinecraftServer;
@@ -10,9 +11,11 @@ import net.minecraft.world.level.storage.LevelResource;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
 
@@ -26,6 +29,7 @@ public class UserSettingsManager {
     private final Map<UUID, String> locatorColors = new HashMap<>();
     private final Map<UUID, Boolean> territoryNotifications = new HashMap<>();
     private final Map<UUID, Boolean> claimDenyNotifications = new HashMap<>();
+    private final Set<UUID> starterKitReceived = new HashSet<>();
     private final Path storageFile;
 
     private UserSettingsManager(Path storageFile) {
@@ -84,6 +88,15 @@ public class UserSettingsManager {
         persistToDisk();
     }
 
+    public boolean hasReceivedStarterKit(UUID uuid) {
+        return starterKitReceived.contains(uuid);
+    }
+
+    public void markStarterKitReceived(UUID uuid) {
+        starterKitReceived.add(uuid);
+        persistToDisk();
+    }
+
     private static UserSettingsManager loadFromDisk(MinecraftServer server) {
         Path file = server.getWorldPath(LevelResource.ROOT).resolve("data").resolve(FILE_NAME);
         UserSettingsManager manager = new UserSettingsManager(file);
@@ -132,6 +145,16 @@ public class UserSettingsManager {
                     }
                 }
             }
+
+            if (root.has("starterKitReceived") && root.get("starterKitReceived").isJsonArray()) {
+                for (JsonElement element : root.getAsJsonArray("starterKitReceived")) {
+                    try {
+                        manager.starterKitReceived.add(UUID.fromString(element.getAsString()));
+                    } catch (Exception ignored) {
+                        // Ignore malformed entries and keep gameplay stable.
+                    }
+                }
+            }
         } catch (Exception ignored) {
             // Keep defaults if reading/parsing fails.
         }
@@ -166,6 +189,12 @@ public class UserSettingsManager {
                 deny.addProperty(entry.getKey().toString(), entry.getValue());
             }
             root.add("claimDenyNotifications", deny);
+
+            JsonArray starterKit = new JsonArray();
+            for (UUID uuid : starterKitReceived) {
+                starterKit.add(uuid.toString());
+            }
+            root.add("starterKitReceived", starterKit);
 
             Files.writeString(storageFile, GSON.toJson(root), StandardCharsets.UTF_8);
         } catch (Exception ignored) {

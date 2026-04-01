@@ -6,6 +6,7 @@ import io.github.kuscheltiermafia.commands.UserCommand;
 import io.github.kuscheltiermafia.events.ClaimExplosionProtectionHandler;
 import io.github.kuscheltiermafia.events.ClaimProtectionHandler;
 import io.github.kuscheltiermafia.events.DamageShieldHandler;
+import io.github.kuscheltiermafia.events.FirstJoinHandler;
 import io.github.kuscheltiermafia.registry.ModItems;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -27,6 +28,7 @@ public class EchoCraft3 implements ModInitializer {
 		DamageShieldHandler.register();
 		ClaimProtectionHandler.register();
 		ClaimExplosionProtectionHandler.register();
+		FirstJoinHandler.register();
 
 		// Register commands
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
